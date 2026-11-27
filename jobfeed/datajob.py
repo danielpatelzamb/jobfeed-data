@@ -148,6 +148,9 @@ def main(argv=None) -> int:
         started = time.monotonic()
         idx.refresh_board_stats()
         pruned = idx.prune()
+        from jobfeed import names
+        renamed = names.fix_index(idx)  # "davispolk" -> "Davis Polk" where the index itself shows the real name
+        print(f"readable company names: {renamed}")
         if idx.count_open() == 0:
             print("Nothing crawled; not publishing an empty index over yesterday's.")
             return 2

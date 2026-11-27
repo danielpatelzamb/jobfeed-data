@@ -2,6 +2,8 @@
 matches, and whether the experience it asks for matches yours."""
 from __future__ import annotations
 
+import re
+
 from datetime import datetime, timezone
 
 SORTS = {"best": "Best match", "newest": "Newest posted", "fit": "Best fit (AI)"}
@@ -29,13 +31,26 @@ def to_utc(stamp) -> str:
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def relevance_from_reasons(reasons: str) -> float:
+_FILLER = {"i", "ii", "iii", "junior", "jr", "senior", "sr", "entry", "level", "new", "grad", "graduate", "remote",
+           "hybrid", "us", "usa", "full", "time", "the", "and", "of", "for", "a", "in", "at", "with", "to", "or", "f",
+           "m", "w", "d", "x", "intern", "internship", "summer", "2026", "2027", "2028"}
+
+
+def relevance_from_reasons(reasons: str, title: str = "") -> float:
+    """How well a matched title fits the target phrase: exact titles first, long padded titles lower."""
     r = (reasons or "").lower()
     if r.startswith("title:") or "; title:" in r:
-        return 1.0
-    if "related title" in r:
-        return 0.75
-    return 0.5
+        base, said = 1.0, r.split("title:", 1)[1].split(";")[0]
+    elif "related title" in r:
+        base, said = 0.75, r.split("related title:", 1)[1].split(";")[0]
+    else:
+        return 0.5
+    if not title:
+        return base
+    target = set(re.findall(r"[a-z0-9]+", said.split(",")[0]))
+    words = [w for w in re.findall(r"[a-z0-9]+", title.lower()) if w not in _FILLER]
+    extra = len([w for w in words if w not in target])
+    return round(base * (1.0 - min(0.35, 0.06 * extra)), 3)
 
 
 def exp_fit(years_min, have, stretch) -> float:

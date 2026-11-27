@@ -23,6 +23,28 @@ _ENTRY = _rx([r"junior", r"jr\.?", r"entry", r"entry[- ]level", r"new grad", r"g
 # "Associate" alone is entry in finance; "Associate Director" is not. Senior words win.
 
 
+# Most titles carry no seniority word ("Software Engineer", "Data Analyst"); level_of calls those "mid", and weak
+# words like "Analyst" or "Associate" make a title "entry". Neither is a real statement about the role, so a search
+# for a level also takes the neighbouring tier and lets the years the posting asks for rule roles out.
+_REACH = {"intern": {"intern"}, "entry": {"entry", "mid"}, "mid": {"mid", "entry"}, "senior": {"senior", "mid"}}
+
+
+_MID_WORD = _rx([r"ii", r"2", r"mid[- ]level", r"mid", r"intermediate"])
+
+
+def too_senior_for(levels: list[str] | None, title: str) -> bool:
+    """A title that names a mid tier ("Engineer II", "Mid-level") isn't for someone who only wants entry roles."""
+    return bool(levels) and set(levels) <= {"intern", "entry"} and bool(_MID_WORD.search((title or "").lower()))
+
+
+def search_levels(levels: list[str] | None) -> list[str]:
+    """The stored title levels a search for these levels should include."""
+    out: set[str] = set()
+    for lv in levels or []:
+        out |= _REACH.get(lv, {lv})
+    return sorted(out)
+
+
 def level_of(title: str) -> str:
     t = (title or "").lower()
     if _INTERN.search(t) and "international" not in t.replace("intern ", ""):
@@ -65,8 +87,11 @@ def is_us(location: str) -> bool | None:
     loc = raw.lower()
     if not loc.strip() or loc.strip() in ("remote", "anywhere", "worldwide", "global", "hybrid", "not specified"):
         return None
-    us = bool(_US_WORDS.search(loc) or _US_ABBR.search(raw) or _US_CITIES.search(loc))
+    strong = bool(_US_WORDS.search(loc) or _US_ABBR.search(raw))
+    us = strong or bool(_US_CITIES.search(loc))
     other = bool(_NOT_US.search(loc))
+    if other and not strong:  # "Boston, Lincolnshire, UK", "Cambridge, UK": a US city name abroad
+        return False
     if us and not other:
         return True
     if other and not us:

@@ -75,6 +75,7 @@ def guess_urls(today: datetime | None = None) -> list[tuple[str, str]]:
     for y in (fy, fy - 1):
         for q in (4, 3, 2, 1):
             name = f"LCA_Disclosure_Data_FY{y}_Q{q}.xlsx"
+            out.append(("https://www.dol.gov/media/" + name, f"FY{y} Q{q}"))  # where OFLC posts them since 2026
             out.append((FILE_BASE + name, f"FY{y} Q{q}"))
             out.append((FILE_BASE + f"FY{str(y)[2:]}Q{q}/" + name, f"FY{y} Q{q}"))
     return out
@@ -205,6 +206,28 @@ def refresh(index, session=None, force: bool = False) -> dict:
     except Exception as exc:  # a bad quarter never breaks the daily run
         log.exception("sponsor data refresh failed")
         meta["error"] = f"Import failed: {str(exc)[:120]}"
+    index.set_meta("sponsors", meta)
+    return meta
+
+
+def import_file(index, path: str, label: str = "") -> dict:
+    """Import a disclosure file the owner downloaded in a browser (DOL blocks automated downloads)."""
+    from jobfeed.index import now_iso
+    meta = index.get_meta("sponsors") or {}
+    try:
+        emp, titles = aggregate(_rows_from_file(path))
+        if not emp:
+            raise ValueError("no certified H-1B rows found; is this the LCA disclosure file?")
+        m = re.search(r"FY(\d{4})", label or os.path.basename(path), re.I)
+        q = re.search(r"Q([1-4])", label or os.path.basename(path), re.I)
+        with index.lock:
+            store_summary(index.db, emp, titles, m.group(1) if m else "")
+        meta.update({"url": "upload", "file": (f"FY{m.group(1)}" + (f" Q{q.group(1)}" if q else "")) if m else "uploaded",
+                     "employers": len(emp), "imported_at": now_iso()})
+        meta.pop("error", None)
+    except Exception as exc:
+        log.exception("sponsor file import failed")
+        meta["error"] = f"Import failed: {str(exc)[:160]}"
     index.set_meta("sponsors", meta)
     return meta
 

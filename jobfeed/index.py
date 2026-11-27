@@ -492,6 +492,32 @@ class JobIndex:
             self.set_meta("crawl_tuning", t)
         return {"sources": sources, "open": n, "crawl": json.loads(crawl[0]) if crawl and crawl[0] else None}
 
+    def _carry_sponsors(self, new_db_path: str):
+        """The published index can't include the visa-sponsor tables (the owner imports that file by hand), so keep
+        ours when the new one has none."""
+        try:
+            mine = self._q("SELECT COUNT(*) AS n FROM sponsors", one=True)["n"]
+        except Exception:
+            return
+        if not mine:
+            return
+        from jobfeed.sponsors import SCHEMA as SPONSOR_SCHEMA
+        new = sqlite3.connect(new_db_path)
+        try:
+            new.executescript(SPONSOR_SCHEMA)
+            if new.execute("SELECT COUNT(*) FROM sponsors").fetchone()[0]:
+                return
+            new.execute("ATTACH DATABASE ? AS old", (self.path,))
+            new.execute("INSERT INTO sponsors SELECT * FROM old.sponsors")
+            new.execute("INSERT INTO sponsor_titles SELECT * FROM old.sponsor_titles")
+            meta = new.execute("SELECT value FROM old.meta WHERE key = 'sponsors'").fetchone()
+            if meta:
+                new.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('sponsors', ?)", (meta[0],))
+            new.commit()
+            new.execute("DETACH DATABASE old")
+        finally:
+            new.close()
+
     def replace_with(self, new_db_path: str):
         """Swap in a freshly downloaded index (atomic rename), then reopen."""
         test = sqlite3.connect(new_db_path)
@@ -502,6 +528,7 @@ class JobIndex:
             test.close()
         if not ok:
             raise ValueError("downloaded index failed its integrity check")
+        self._carry_sponsors(new_db_path)
         with self.lock:
             self.db.close()
             for ext in ("-wal", "-shm"):
