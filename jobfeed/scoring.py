@@ -43,6 +43,8 @@ def relevance_from_reasons(reasons: str, title: str = "") -> float:
         base, said = 1.0, r.split("title:", 1)[1].split(";")[0]
     elif "related title" in r:
         base, said = 0.75, r.split("related title:", 1)[1].split(";")[0]
+    elif "nearby role" in r:
+        base, said = 0.55, r.split("nearby role:", 1)[1].split(";")[0]
     else:
         return 0.5
     if not title:

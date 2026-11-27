@@ -29,7 +29,7 @@ _ENTRY = _rx([r"junior", r"jr\.?", r"entry", r"entry[- ]level", r"new grad", r"g
 _REACH = {"intern": {"intern"}, "entry": {"entry", "mid"}, "mid": {"mid", "entry"}, "senior": {"senior", "mid"}}
 
 
-_MID_WORD = _rx([r"ii", r"2", r"mid[- ]level", r"mid", r"intermediate"])
+_MID_WORD = _rx([r"ii", r"mid[- ]level", r"mid", r"intermediate", r"level 2", r"l2"])
 
 
 def too_senior_for(levels: list[str] | None, title: str) -> bool:
