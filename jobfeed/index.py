@@ -529,6 +529,37 @@ class JobIndex:
         finally:
             new.close()
 
+    # ---------- roles members saved from big employers' own sites ----------
+    # Google, Amazon, Meta, Apple and Microsoft post on their own sites, which we don't crawl. When a member saves a
+    # public posting from one of them, its link, title, company and place go into the index for everyone it fits
+    # (never who saved it). They expire SHARED_DAYS after the last save.
+    SHARED_DAYS = 30
+
+    def add_shared(self, job: Job) -> bool:
+        """Add or refresh one shared posting. Returns True when it's new."""
+        board = job.board
+        rows = self._q("SELECT * FROM postings WHERE source = 'shared' AND board = ? AND open = 1", (board,))
+        others = [self.as_job(r) for r in rows if r["key"] != job.key]
+        for o, r in zip(others, [r for r in rows if r["key"] != job.key]):
+            o.extra["first_seen"] = r["first_seen"]
+            o.extra["keep_desc"] = True
+        before = {r["key"] for r in rows}
+        self.ingest_board("shared", board, others + [job])
+        with self.lock:  # others keep their own last-saved date; only this one is refreshed
+            for r in rows:
+                if r["key"] != job.key:
+                    self.db.execute("UPDATE postings SET last_seen = ? WHERE key = ?", (r["last_seen"], r["key"]))
+            self.db.commit()
+        return job.key not in before
+
+    def expire_shared(self, days: int | None = None) -> int:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days or self.SHARED_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with self.lock:
+            n = self.db.execute("UPDATE postings SET open = 0 WHERE source = 'shared' AND open = 1 AND last_seen < ?",
+                                (cutoff,)).rowcount
+            self.db.commit()
+        return n
+
     def replace_with(self, new_db_path: str):
         """Swap in a freshly downloaded index (atomic rename), then reopen."""
         test = sqlite3.connect(new_db_path)
@@ -540,6 +571,11 @@ class JobIndex:
         if not ok:
             raise ValueError("downloaded index failed its integrity check")
         self._carry_sponsors(new_db_path)
+        try:  # members' shared saves live only on this server: bring them into the new index
+            shared = [(self.as_job(r), r["first_seen"], r["last_seen"]) for r in
+                      self._q("SELECT * FROM postings WHERE source = 'shared' AND open = 1")]
+        except Exception:
+            shared = []
         with self.lock:
             self.db.close()
             for ext in ("-wal", "-shm"):
@@ -549,6 +585,15 @@ class JobIndex:
             self.db = sqlite3.connect(self.path, check_same_thread=False, timeout=30)
             self.db.row_factory = sqlite3.Row
             self.db.execute("PRAGMA journal_mode=WAL")
+        by_board: dict[str, list] = {}
+        for job, first, last in shared:
+            job.extra["first_seen"] = first
+            by_board.setdefault(job.board, []).append((job, last))
+        for board, items in by_board.items():
+            self.ingest_board("shared", board, [j for j, _ in items])
+            with self.lock:
+                self.db.executemany("UPDATE postings SET last_seen = ? WHERE key = ?", [(l, j.key) for j, l in items])
+                self.db.commit()
 
     def get(self, posting_id: int):
         return self._q("SELECT * FROM postings WHERE id = ?", (posting_id,), one=True)

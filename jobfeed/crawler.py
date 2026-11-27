@@ -21,7 +21,7 @@ log = logging.getLogger("jobfeed.crawler")
 
 WORKERS = {"greenhouse": 5, "ashby": 4, "lever": 3, "smartrecruiters": 3, "workday": 4, "icims": 12, "successfactors": 4, "taleo": 4,
            "oracle": 4, "bamboohr": 8, "paylocity": 4, "recruitee": 4, "personio": 4, "breezy": 4, "teamtailor": 4,
-           "jazzhr": 4, "jobvite": 4, "rippling": 4, "adp": 4, "ukg": 4, "paycom": 4, "dayforce": 4, "jsonld": 12}  # Lever is still paced to one request a second
+           "jazzhr": 4, "jobvite": 4, "rippling": 4, "adp": 4, "ukg": 4, "paycom": 4, "dayforce": 4, "jsonld": 12, "google": 1}  # Lever is still paced to one request a second
 
 
 class _Spacer:
@@ -40,7 +40,7 @@ class _Spacer:
 
 ALL_ATS = ("greenhouse", "ashby", "lever", "smartrecruiters", "workday", "icims", "successfactors", "taleo", "oracle",
            "bamboohr", "paylocity", "recruitee", "personio", "breezy", "teamtailor",
-           "jazzhr", "jobvite", "rippling", "adp", "ukg", "paycom", "dayforce", "jsonld")
+           "jazzhr", "jobvite", "rippling", "adp", "ukg", "paycom", "dayforce", "jsonld", "google")
 
 
 # Platform groups crawled side by side as separate jobs in the data workflow (each on its own machine).
@@ -49,7 +49,7 @@ GROUPS = {
     "startups": ("ashby", "bamboohr", "paylocity", "recruitee", "personio", "breezy", "teamtailor"),
     "workday": ("workday",),
     "enterprise": ("icims", "successfactors", "taleo", "oracle"),
-    "longtail": ("jazzhr", "jobvite", "rippling", "adp", "ukg", "paycom", "dayforce", "jsonld"),
+    "longtail": ("jazzhr", "jobvite", "rippling", "adp", "ukg", "paycom", "dayforce", "jsonld", "google"),
 }
 
 

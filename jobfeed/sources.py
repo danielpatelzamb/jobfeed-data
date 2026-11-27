@@ -232,3 +232,4 @@ FETCHERS: dict[str, Callable[..., list[Job]]] = {
 # Careers-site readers (Workday, iCIMS, SuccessFactors, Taleo, Oracle) register themselves into FETCHERS.
 import jobfeed.careers  # noqa: E402,F401
 import jobfeed.smb  # noqa: F401,E402  (registers the smaller hiring systems)
+import jobfeed.bigtech  # noqa: F401,E402  (big employers' own sites, where their rules allow)

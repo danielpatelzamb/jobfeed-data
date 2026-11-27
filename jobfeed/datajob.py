@@ -64,6 +64,8 @@ def main(argv=None) -> int:
 
         from jobfeed.crawler import crawl
         added = idx.load_directory()
+        if not idx._q("SELECT 1 FROM boards WHERE ats = 'google'"):  # one 'board': Google's own careers site
+            idx.add_board("google", "google", "Google", origin="directory")
         stop = threading.Event()
         if args.minutes:
             threading.Timer(args.minutes * 60, stop.set).start()
