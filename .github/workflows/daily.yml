@@ -112,13 +112,16 @@ jobs:
             python -m jobfeed.datajob discover --wdc "$WDC" || echo "discovery skipped"
           fi
 
+      - name: Audit this run against the last one (what broke, what improved, what's tuned for tomorrow)
+        run: python -m jobfeed.datajob audit --out audit.json --md audit.md && cat audit.md >> "$GITHUB_STEP_SUMMARY"
+
       - name: Signals, cleanup and export
         run: python -m jobfeed.datajob finish --out index.db.gz --summary summary.json
 
       - name: Publish
         run: |
           gh release view index >/dev/null 2>&1 || gh release create index --title "Job index" --notes "Rebuilt daily by the workflow. index.db.gz is the data; summary.json says what came in."
-          gh release upload index index.db.gz summary.json --clobber
+          gh release upload index index.db.gz summary.json audit.json --clobber
           python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import json; s = json.load(open("summary.json"))
           print(f"### {s['open']:,} open roles from {s['companies']:,} companies")

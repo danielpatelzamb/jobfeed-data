@@ -173,6 +173,9 @@ class JobIndex:
         for col in ("new_30", "new_prev_30", "open_now"):
             if col not in have_b:
                 self.db.execute(f"ALTER TABLE boards ADD COLUMN {col} INTEGER")
+        for col in ("last_error", "error_class", "last_tried"):
+            if col not in have_b:
+                self.db.execute(f"ALTER TABLE boards ADD COLUMN {col} TEXT")
         self.db.commit()
 
     def _q(self, sql: str, args=(), one: bool = False):
@@ -220,8 +223,11 @@ class JobIndex:
             args.append(limit)
         return self._q(q, args)
 
-    def board_result(self, ats: str, board: str, ok: bool, count: int = 0, dead: bool = False, company: str = ""):
-        """Record a crawl of one board and when to try it next."""
+    def board_result(self, ats: str, board: str, ok: bool, count: int = 0, dead: bool = False, company: str = "",
+                     error: str = ""):
+        """Record a crawl of one board, why it failed (if it did), and when to try it next."""
+        from jobfeed.crawlaudit import BACKOFF_DAYS, classify
+        cls = classify(error) if not ok else None
         now = datetime.now(timezone.utc)
         with self.lock:
             row = self.db.execute("SELECT fails FROM boards WHERE ats=? AND board=?", (ats, board)).fetchone()
@@ -233,7 +239,7 @@ class JobIndex:
             else:
                 fails += 1
                 status = "dead" if dead else "failing"
-                days = 14 if dead else min(2 ** fails, 14)
+                days = 14 if dead else BACKOFF_DAYS.get(cls or "", min(2 ** fails, 14))
                 nxt = (now + timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
             self.db.execute("""INSERT INTO boards (ats, board, company, status, fails, next_try, last_ok, last_count)
                                VALUES (?,?,?,?,?,?,?,?)
@@ -243,6 +249,8 @@ class JobIndex:
                                company=COALESCE(NULLIF(excluded.company,''), boards.company)""",
                             (ats, board, company, status, fails, nxt, now_iso() if ok else None,
                              count if ok else None))
+            self.db.execute("UPDATE boards SET last_error = ?, error_class = ?, last_tried = ? WHERE ats = ? AND board = ?",
+                            (None if ok else (error or "")[:300], cls, now_iso(), ats, board))
             self.db.commit()
 
     # ---------- postings ----------
@@ -430,7 +438,8 @@ class JobIndex:
                 self.db.execute("CREATE TABLE shard.meta (key TEXT PRIMARY KEY, value TEXT)")
                 self.db.execute(f"INSERT INTO shard.boards SELECT * FROM boards WHERE ats IN ({marks})", sources)
                 self.db.execute(f"INSERT INTO shard.postings SELECT * FROM postings WHERE source IN ({marks})", sources)
-                self.db.execute("INSERT INTO shard.meta SELECT key, value FROM meta WHERE key = 'last_crawl'")
+                self.db.execute("INSERT INTO shard.meta SELECT key, value FROM meta WHERE key IN ('last_crawl', "
+                                "'crawl_tuning')")
                 self.db.execute("INSERT INTO shard.meta VALUES ('sources', ?)", (json.dumps(sources),))
                 self.db.commit()
                 n = self.db.execute("SELECT COUNT(*) FROM shard.postings").fetchone()[0]
@@ -445,6 +454,7 @@ class JobIndex:
         try:
             sources = tuple(json.loads(src.execute("SELECT value FROM meta WHERE key = 'sources'").fetchone()[0]))
             crawl = src.execute("SELECT value FROM meta WHERE key = 'last_crawl'").fetchone()
+            tuning = src.execute("SELECT value FROM meta WHERE key = 'crawl_tuning'").fetchone()
         finally:
             src.close()
         marks = ",".join("?" * len(sources))
@@ -474,6 +484,10 @@ class JobIndex:
                                     sources).fetchone()[0]
             finally:
                 self.db.execute("DETACH DATABASE shard")
+        if tuning and tuning[0]:  # each machine tuned its own platforms; keep those numbers
+            t = self.get_meta("crawl_tuning") or {}
+            t.update({k: v for k, v in json.loads(tuning[0]).items() if k in sources})
+            self.set_meta("crawl_tuning", t)
         return {"sources": sources, "open": n, "crawl": json.loads(crawl[0]) if crawl and crawl[0] else None}
 
     def replace_with(self, new_db_path: str):

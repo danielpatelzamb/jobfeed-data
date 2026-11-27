@@ -57,7 +57,8 @@ def crawl(index: JobIndex, fetchers=FETCHERS, ats: tuple[str, ...] = ALL_ATS,
           limit: int | None = None, workers: dict | None = None, stop: threading.Event | None = None,
           spacing: dict | None = None, boards: list | None = None, record: bool = True) -> dict:
     """Fetch every due board and load it into the index. Platforms run side by side."""
-    workers = {**WORKERS, **(workers or {})}
+    base_workers = {**WORKERS, **(workers or {})}
+    workers = {**base_workers, **(index.get_meta("crawl_tuning") or {})}  # what the last runs learned wins
     spacing = {"lever": 1.0, **(spacing or {})}
     totals = {"boards": 0, "ok": 0, "failed": 0, "dead": 0, "postings": 0, "new": 0}
     from collections import Counter
@@ -101,7 +102,7 @@ def crawl(index: JobIndex, fetchers=FETCHERS, ats: tuple[str, ...] = ALL_ATS,
                     continue
                 if err is not None:
                     dead = "404" in err
-                    index.board_result(platform, row["board"], ok=False, dead=dead)
+                    index.board_result(platform, row["board"], ok=False, dead=dead, error=err)
                     with tl:
                         totals["boards"] += 1
                         totals["dead" if dead else "failed"] += 1
@@ -110,6 +111,11 @@ def crawl(index: JobIndex, fetchers=FETCHERS, ats: tuple[str, ...] = ALL_ATS,
                             reasons[f"{platform}: {_re.sub(r'[0-9a-f-]{8,}|https?://\S+', '…', err)[:70]}"] += 1
                         pp = per_platform.setdefault(platform, {"ok": 0, "failed": 0, "dead": 0, "postings": 0})
                         pp["dead" if dead else "failed"] += 1
+                        if not dead:
+                            from jobfeed.crawlaudit import classify
+                            c = pp.setdefault("classes", {})
+                            k = classify(err)
+                            c[k] = c.get(k, 0) + 1
                     continue
                 company = row["company"] or (jobs[0].company if jobs and jobs[0].company != row["board"] else "") \
                     or pretty_company(row["board"])
@@ -136,6 +142,13 @@ def crawl(index: JobIndex, fetchers=FETCHERS, ats: tuple[str, ...] = ALL_ATS,
     totals["seconds"] = round(time.monotonic() - started)
     totals["platforms"] = per_platform
     totals["top_failures"] = reasons.most_common(12)
+    if record:  # learn connection counts for next time from what happened now
+        from jobfeed.crawlaudit import tune
+        prev = index.get_meta("crawl_tuning") or {}
+        tuned, changes = tune(base_workers, {**base_workers, **prev}, per_platform, minutes_left=not (stop is not None and stop.is_set()))
+        merged = {**(index.get_meta("crawl_tuning") or {}), **{k: v for k, v in tuned.items() if k in ats}}
+        index.set_meta("crawl_tuning", merged)
+        totals["tuning"] = changes
     if record:
         index.set_meta("last_crawl", {**totals, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
     log.info("crawl done: %s", totals)

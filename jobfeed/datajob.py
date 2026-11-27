@@ -49,6 +49,9 @@ def main(argv=None) -> int:
     dsc = sub.add_parser("discover")
     dsc.add_argument("--wdc", default=os.environ.get("WDC_JOBPOSTING_URLS", ""),
                      help="comma-separated Web Data Commons JobPosting N-Quads file URLs")
+    au = sub.add_parser("audit")
+    au.add_argument("--out", default="audit.json")
+    au.add_argument("--md", default="audit.md")
     f = sub.add_parser("finish")
     f.add_argument("--out", default="index.db.gz")
     f.add_argument("--summary", default="summary.json")
@@ -89,6 +92,7 @@ def main(argv=None) -> int:
             totals["seconds"] = max(totals["seconds"], c.get("seconds", 0))
             totals["platforms"].update(c.get("platforms") or {})
             totals["top_failures"] += c.get("top_failures") or []
+            totals.setdefault("tuning", []).extend(c.get("tuning") or [])
             totals["groups"][",".join(r["sources"])] = r["open"]
         totals["top_failures"] = sorted(totals["top_failures"], key=lambda x: -x[1])[:15]
         totals["at"] = now_iso()
@@ -123,6 +127,23 @@ def main(argv=None) -> int:
         idx.set_meta("last_discover", {"at": now_iso()[:10], "found": len(found), "sites": len(sites)})
         print(json.dumps({"found": len(found), "sites_with_job_markup": len(sites)}))
         return 0
+    if args.cmd == "audit":
+        from jobfeed import crawlaudit
+        stats = idx.stats()
+        crawl = idx.get_meta("last_crawl") or {}
+        history = idx.get_meta("audit_history") or []
+        a = crawlaudit.audit(stats, crawl, history[-1] if history else None, crawl.get("tuning") or [],
+                             stats.get("boards") or {})
+        a["examples"] = {c: [dict(r) for r in idx._q(
+            "SELECT ats, board, last_error FROM boards WHERE error_class = ? AND last_tried >= ? LIMIT 5",
+            (c, now_iso()[:10]))] for c in (a.get("error_classes") or {})}
+        idx.set_meta("audit_history", (history + [{k: v for k, v in a.items() if k != "examples"}])[-30:])
+        with open(args.out, "w") as fh:
+            json.dump(a, fh, indent=2, default=str)
+        with open(args.md, "w") as fh:
+            fh.write(crawlaudit.to_markdown(a))
+        print(crawlaudit.to_markdown(a))
+        return 0
     if args.cmd == "finish":
         started = time.monotonic()
         idx.refresh_board_stats()
@@ -132,6 +153,7 @@ def main(argv=None) -> int:
             return 2
         idx.set_meta("published_at", now_iso())
         summary = {**idx.stats(), "pruned": pruned, "streams": idx.get_meta("last_streams"),
+                   "tuning": idx.get_meta("crawl_tuning"),
                    "sponsors": idx.get_meta("sponsors"), "discover": idx.get_meta("last_discover"),
                    "published_at": idx.get_meta("published_at")}
         size = idx.export(args.out)
