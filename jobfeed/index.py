@@ -415,6 +415,67 @@ class JobIndex:
         os.unlink(tmp)
         return os.path.getsize(out_path)
 
+    def export_shard(self, out_path: str, sources) -> dict:
+        """Only these platforms' boards and postings, plus the crawl summary, for merging into the day's index."""
+        sources = tuple(sources)
+        marks = ",".join("?" * len(sources))
+        if os.path.exists(out_path):
+            os.unlink(out_path)
+        with self.lock:
+            self.db.commit()
+            self.db.execute("ATTACH DATABASE ? AS shard", (out_path,))
+            try:
+                self.db.execute("CREATE TABLE shard.boards AS SELECT * FROM boards WHERE 0")
+                self.db.execute("CREATE TABLE shard.postings AS SELECT * FROM postings WHERE 0")
+                self.db.execute("CREATE TABLE shard.meta (key TEXT PRIMARY KEY, value TEXT)")
+                self.db.execute(f"INSERT INTO shard.boards SELECT * FROM boards WHERE ats IN ({marks})", sources)
+                self.db.execute(f"INSERT INTO shard.postings SELECT * FROM postings WHERE source IN ({marks})", sources)
+                self.db.execute("INSERT INTO shard.meta SELECT key, value FROM meta WHERE key = 'last_crawl'")
+                self.db.execute("INSERT INTO shard.meta VALUES ('sources', ?)", (json.dumps(sources),))
+                self.db.commit()
+                n = self.db.execute("SELECT COUNT(*) FROM shard.postings").fetchone()[0]
+            finally:
+                self.db.execute("DETACH DATABASE shard")
+        return {"postings": n, "sources": sources}
+
+    def merge_shard(self, path: str) -> dict:
+        """Replace these platforms' boards and postings with a shard's, matching postings by key so ids (and the
+        search index) stay stable for roles that were already here."""
+        src = sqlite3.connect(path)
+        try:
+            sources = tuple(json.loads(src.execute("SELECT value FROM meta WHERE key = 'sources'").fetchone()[0]))
+            crawl = src.execute("SELECT value FROM meta WHERE key = 'last_crawl'").fetchone()
+        finally:
+            src.close()
+        marks = ",".join("?" * len(sources))
+        cols = [r[1] for r in self.db.execute("PRAGMA table_info(postings)") if r[1] != "id"]
+        cl = ", ".join(cols)
+        upd = ", ".join(f"{c} = excluded.{c}" for c in cols if c != "key")
+        with self.lock:
+            self.db.commit()
+            self.db.execute("ATTACH DATABASE ? AS shard", (path,))
+            try:
+                scols = {r[1] for r in self.db.execute("PRAGMA shard.table_info(postings)")}
+                sel = ", ".join(c if c in scols else "NULL" for c in cols)
+                self.db.execute(f"DELETE FROM postings_fts WHERE rowid IN (SELECT id FROM postings WHERE source IN ({marks}))",
+                                sources)
+                self.db.execute(f"DELETE FROM postings WHERE source IN ({marks}) AND key NOT IN "
+                                f"(SELECT key FROM shard.postings)", sources)
+                self.db.execute(f"INSERT INTO postings ({cl}) SELECT {sel} FROM shard.postings WHERE true "
+                                f"ON CONFLICT(key) DO UPDATE SET {upd}")
+                self.db.execute(f"INSERT INTO postings_fts (rowid, title, company, department, location) SELECT id, title, "
+                                f"company, COALESCE(department, ''), COALESCE(location, '') FROM postings "
+                                f"WHERE source IN ({marks})", sources)
+                self.db.execute(f"DELETE FROM boards WHERE ats IN ({marks})", sources)
+                bcols = [r[1] for r in self.db.execute("PRAGMA shard.table_info(boards)")]
+                self.db.execute(f"INSERT OR REPLACE INTO boards ({', '.join(bcols)}) SELECT {', '.join(bcols)} FROM shard.boards")
+                self.db.commit()
+                n = self.db.execute(f"SELECT COUNT(*) FROM postings WHERE source IN ({marks}) AND open = 1",
+                                    sources).fetchone()[0]
+            finally:
+                self.db.execute("DETACH DATABASE shard")
+        return {"sources": sources, "open": n, "crawl": json.loads(crawl[0]) if crawl and crawl[0] else None}
+
     def replace_with(self, new_db_path: str):
         """Swap in a freshly downloaded index (atomic rename), then reopen."""
         test = sqlite3.connect(new_db_path)

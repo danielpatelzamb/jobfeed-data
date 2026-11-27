@@ -18,9 +18,52 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
+  crawl:
+    # Five machines crawl side by side, each starting from yesterday's index; politeness per site is unchanged.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {group: boards,     pages: "25000", workers: "0"}
+          - {group: startups,   pages: "25000", workers: "0"}
+          - {group: workday,    pages: "60000", workers: "24"}
+          - {group: enterprise, pages: "40000", workers: "0"}
+          - {group: longtail,   pages: "40000", workers: "0"}
     runs-on: ubuntu-latest
     timeout-minutes: 330
+    env:
+      GH_TOKEN: ${{ github.token }}
+      JOBFEED_DATA: data
+      CAREER_PAGES_PER_RUN: ${{ matrix.pages }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Start from yesterday's index
+        run: |
+          mkdir -p data
+          if gh release download index --pattern index.db.gz --dir data 2>/dev/null; then
+            gunzip -f data/index.db.gz
+          else
+            echo "no earlier index: first run"
+          fi
+      - name: Crawl ${{ matrix.group }}
+        run: python -m jobfeed.datajob crawl --group ${{ matrix.group }} --workers ${{ matrix.workers }} --minutes 240
+      - name: Package this group's results
+        run: python -m jobfeed.datajob shard --group ${{ matrix.group }} --out shard-${{ matrix.group }}.db
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shard-${{ matrix.group }}
+          path: shard-${{ matrix.group }}.db
+          retention-days: 1
+
+  publish:
+    needs: crawl
+    if: always()            # a failed group keeps yesterday's data for its platforms; the rest still publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
     env:
       GH_TOKEN: ${{ github.token }}
       JOBFEED_DATA: data
@@ -42,8 +85,15 @@ jobs:
             echo "no earlier index: first run"
           fi
 
-      - name: Crawl every company board and careers site
-        run: python -m jobfeed.datajob crawl --minutes 240
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: shard-*
+          path: shards
+          merge-multiple: true
+
+      - name: Merge the groups
+        run: python -m jobfeed.datajob merge shards/*.db
 
       - name: Extra feeds (Workable, Hacker News)
         run: python -m jobfeed.datajob streams
@@ -73,6 +123,8 @@ jobs:
           import json; s = json.load(open("summary.json"))
           print(f"### {s['open']:,} open roles from {s['companies']:,} companies")
           print(f"Published {s['published_at']}, {s['export_bytes']/1e6:,.0f} MB")
-          for k, v in (s.get('streams') or {}).items():
+          for k, v in (s.get('by_source') or {}).items():
               print(f"- {k}: {v}")
+          for k, v in ((s.get('last_crawl') or {}).get('top_failures') or []):
+              print(f"- failing: {k} ×{v}")
           PY

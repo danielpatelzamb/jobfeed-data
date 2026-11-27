@@ -36,6 +36,13 @@ def main(argv=None) -> int:
     c.add_argument("--limit", type=int, default=None)
     c.add_argument("--ats", default="", help="comma-separated platforms (default: all of them)")
     c.add_argument("--minutes", type=float, default=0, help="stop starting new boards after this long")
+    c.add_argument("--group", default="", help="one platform group from crawler.GROUPS (for parallel jobs)")
+    c.add_argument("--workers", type=int, default=0, help="connections per platform (default: built-in)")
+    sh = sub.add_parser("shard")
+    sh.add_argument("--group", required=True)
+    sh.add_argument("--out", required=True)
+    mg = sub.add_parser("merge")
+    mg.add_argument("shards", nargs="*")
     sub.add_parser("streams")
     s = sub.add_parser("sponsors")
     s.add_argument("--force", action="store_true")
@@ -56,12 +63,38 @@ def main(argv=None) -> int:
         stop = threading.Event()
         if args.minutes:
             threading.Timer(args.minutes * 60, stop.set).start()
-        from jobfeed.crawler import ALL_ATS
-        ats = tuple(a.strip() for a in args.ats.split(",") if a.strip()) or ALL_ATS
-        out = crawl(idx, ats=ats, limit=args.limit, stop=stop)
+        from jobfeed.crawler import ALL_ATS, GROUPS
+        ats = tuple(a.strip() for a in args.ats.split(",") if a.strip()) or GROUPS.get(args.group) or ALL_ATS
+        out = crawl(idx, ats=ats, limit=args.limit, stop=stop,
+                    workers={a: args.workers for a in ats} if args.workers else None)
         out["directory_added"] = added
         print(json.dumps(out))
         os._exit(0)  # don't wait on a pending stop timer
+    if args.cmd == "shard":
+        from jobfeed.crawler import GROUPS
+        print(json.dumps(idx.export_shard(args.out, GROUPS[args.group])))
+        return 0
+    if args.cmd == "merge":
+        totals = {"boards": 0, "ok": 0, "failed": 0, "dead": 0, "postings": 0, "new": 0, "seconds": 0,
+                  "platforms": {}, "top_failures": [], "groups": {}}
+        for path in args.shards:
+            try:
+                r = idx.merge_shard(path)
+            except Exception as exc:  # a missing or broken shard keeps yesterday's data for those platforms
+                print(f"shard {path} skipped: {exc}")
+                continue
+            c = r.get("crawl") or {}
+            for k in ("boards", "ok", "failed", "dead", "postings", "new"):
+                totals[k] += c.get(k, 0)
+            totals["seconds"] = max(totals["seconds"], c.get("seconds", 0))
+            totals["platforms"].update(c.get("platforms") or {})
+            totals["top_failures"] += c.get("top_failures") or []
+            totals["groups"][",".join(r["sources"])] = r["open"]
+        totals["top_failures"] = sorted(totals["top_failures"], key=lambda x: -x[1])[:15]
+        totals["at"] = now_iso()
+        idx.set_meta("last_crawl", totals)
+        print(json.dumps(totals, default=str))
+        return 0
     if args.cmd == "streams":
         from jobfeed import streams
         print(json.dumps(streams.run_streams(idx), default=str))
@@ -72,7 +105,11 @@ def main(argv=None) -> int:
         return 0
     if args.cmd == "discover":
         from jobfeed import streams
-        found = streams.discover_common_crawl()
+        try:
+            found = streams.discover_common_crawl()
+        except Exception as exc:
+            print(f"Common Crawl skipped: {exc}")
+            found = set()
         for ats, b in found:
             idx.add_board(ats, b, origin="discovered")
         sites = {}

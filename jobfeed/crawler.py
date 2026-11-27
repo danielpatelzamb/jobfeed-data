@@ -43,6 +43,16 @@ ALL_ATS = ("greenhouse", "ashby", "lever", "workday", "icims", "successfactors",
            "jazzhr", "jobvite", "rippling", "adp", "ukg", "paycom", "dayforce", "jsonld")
 
 
+# Platform groups crawled side by side as separate jobs in the data workflow (each on its own machine).
+GROUPS = {
+    "boards": ("greenhouse", "lever"),
+    "startups": ("ashby", "bamboohr", "paylocity", "recruitee", "personio", "breezy", "teamtailor"),
+    "workday": ("workday",),
+    "enterprise": ("icims", "successfactors", "taleo", "oracle"),
+    "longtail": ("jazzhr", "jobvite", "rippling", "adp", "ukg", "paycom", "dayforce", "jsonld"),
+}
+
+
 def crawl(index: JobIndex, fetchers=FETCHERS, ats: tuple[str, ...] = ALL_ATS,
           limit: int | None = None, workers: dict | None = None, stop: threading.Event | None = None,
           spacing: dict | None = None, boards: list | None = None, record: bool = True) -> dict:
