@@ -59,8 +59,42 @@ jobs:
           path: shard-${{ matrix.group }}.db
           retention-days: 1
 
+  discover:
+    # New company boards from Common Crawl's URL index (last two snapshots), weekly or when run by hand. Runs beside
+    # the crawl; the boards it finds are crawled from the next day on.
+    runs-on: ubuntu-latest
+    timeout-minutes: 200
+    steps:
+      - name: Only on Mondays or by hand
+        id: when
+        run: |
+          if [ "$(date -u +%u)" = "1" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "go=1" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.when.outputs.go == '1'
+      - uses: actions/setup-python@v5
+        if: steps.when.outputs.go == '1'
+        with:
+          python-version: "3.12"
+      - if: steps.when.outputs.go == '1'
+        run: pip install -r requirements.txt
+      - name: Find boards
+        if: steps.when.outputs.go == '1'
+        env:
+          JOBFEED_DATA: scratch
+        run: |
+          mkdir -p scratch
+          python -m jobfeed.datajob discover --out boards-found.json --crawls 2 --max-pages 150 --minutes 180 || echo "[]" > boards-found.json
+      - uses: actions/upload-artifact@v4
+        if: steps.when.outputs.go == '1'
+        with:
+          name: boards-found
+          path: boards-found.json
+          retention-days: 1
+
   publish:
-    needs: crawl
+    needs: [crawl, discover]
     if: always()            # a failed group keeps yesterday's data for its platforms; the rest still publish
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -95,6 +129,15 @@ jobs:
       - name: Merge the groups
         run: python -m jobfeed.datajob merge shards/*.db
 
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: boards-found
+          path: found
+
+      - name: Add newly found company boards
+        run: python -m jobfeed.datajob add-boards found/boards-found.json || echo "no new boards this time"
+
       - name: Extra feeds (Workable, Hacker News)
         run: python -m jobfeed.datajob streams
 
@@ -112,7 +155,7 @@ jobs:
               base=https://data.dws.informatik.uni-mannheim.de/structureddata/2024-12/quads/classspecific/JobPosting
               WDC=$(for i in $(seq 0 13); do printf "%s/part_%s.gz," "$base" "$i"; done)
             fi
-            python -m jobfeed.datajob discover --wdc "$WDC" || echo "discovery skipped"
+            python -m jobfeed.datajob discover --no-common-crawl --wdc "$WDC" || echo "discovery skipped"
           fi
 
       - name: Audit this run against the last one (what broke, what improved, what's tuned for tomorrow)

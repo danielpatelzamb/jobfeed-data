@@ -48,6 +48,13 @@ def main(argv=None) -> int:
     s.add_argument("--force", action="store_true")
     dsc = sub.add_parser("discover")
     dsc.add_argument("--lists-only", action="store_true", help="only the community internship/new-grad lists")
+    dsc.add_argument("--out", default="", help="write found boards to this JSON file instead of the index")
+    dsc.add_argument("--crawls", type=int, default=2, help="Common Crawl snapshots to read")
+    dsc.add_argument("--max-pages", type=int, default=150, help="index pages per host per snapshot")
+    dsc.add_argument("--minutes", type=float, default=None, help="stop Common Crawl after this long")
+    dsc.add_argument("--no-common-crawl", action="store_true")
+    ab = sub.add_parser("add-boards")
+    ab.add_argument("files", nargs="*")
     dsc.add_argument("--wdc", default=os.environ.get("WDC_JOBPOSTING_URLS", ""),
                      help="comma-separated Web Data Commons JobPosting N-Quads file URLs")
     au = sub.add_parser("audit")
@@ -110,6 +117,22 @@ def main(argv=None) -> int:
         from jobfeed import sponsors
         print(json.dumps(sponsors.refresh(idx, force=args.force), default=str))
         return 0
+    if args.cmd == "add-boards":
+        added = 0
+        for path in args.files:
+            try:
+                pairs = json.load(open(path))
+            except (OSError, ValueError) as exc:
+                print(f"skipped {path}: {exc}")
+                continue
+            for ats, b in pairs:
+                if not idx._q("SELECT 1 FROM boards WHERE ats = ? AND board = ?", (ats, b)):
+                    idx.add_board(ats, b, origin="discovered")
+                    added += 1
+        prev = idx.get_meta("last_discover") or {}
+        idx.set_meta("last_discover", {**prev, "at": now_iso()[:10], "new_boards": added})
+        print(json.dumps({"new_boards": added}))
+        return 0
     if args.cmd == "discover":
         from jobfeed import streams
         listed = streams.discover_link_lists()  # new internship/new-grad postings appear here daily
@@ -119,11 +142,18 @@ def main(argv=None) -> int:
             idx.set_meta("last_lists", {"at": now_iso(), "boards": len(listed)})
             print(json.dumps({"boards_from_lists": len(listed)}))
             return 0
-        try:
-            found = streams.discover_common_crawl()
-        except Exception as exc:
-            print(f"Common Crawl skipped: {exc}")
-            found = set()
+        found = set()
+        if not args.no_common_crawl:
+            try:
+                found = streams.discover_common_crawl(crawls=args.crawls, max_pages=args.max_pages,
+                                                      minutes=args.minutes)
+            except Exception as exc:
+                print(f"Common Crawl skipped: {exc}")
+        if args.out:  # a side job: hand the boards to the publish step
+            with open(args.out, "w") as f:
+                json.dump(sorted(found | listed), f)
+            print(json.dumps({"boards_found": len(found | listed)}))
+            return 0
         for ats, b in found:
             idx.add_board(ats, b, origin="discovered")
         sites = {}

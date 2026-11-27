@@ -435,6 +435,11 @@ def board_from_link(link: str) -> tuple[str, str] | None:
     """(ats, board) for a careers-site URL, or None."""
     u = urlparse(link.strip() if "://" in link else "https://" + link.strip())
     host, path = u.netloc.lower(), u.path
+    m = re.match(r"(wd\d+)\.myworkdaysite\.com", host)  # wd5.myworkdaysite.com/recruiting/<tenant>/<site>/...
+    if m:
+        segs = [p for p in path.split("/") if p and not re.fullmatch(r"[a-z]{2}-[A-Z]{2}", p)]
+        if len(segs) >= 3 and segs[0] == "recruiting":
+            return "workday", f"{segs[1].lower()}|{m.group(1)}|{segs[2]}"
     m = re.match(r"([a-z0-9-]+)\.(wd\d+)\.myworkdayjobs\.com", host)
     if m:
         segs = [p for p in path.split("/") if p and not re.fullmatch(r"[a-z]{2}-[A-Z]{2}", p)]

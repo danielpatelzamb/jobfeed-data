@@ -17,6 +17,7 @@ import logging
 import os
 import re
 import tempfile
+import time
 import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
 from typing import Iterable, Iterator
@@ -48,7 +49,7 @@ def discover_boards(text: str) -> set[tuple[str, str]]:
     from jobfeed.careers import board_from_link
     out = set()
     for u in _ANY_URL.findall(html.unescape(text or "")):
-        if any(h in u for h in ("myworkdayjobs.com", "icims.com", "taleo.net", "jobs2web.com", "successfactors",
+        if any(h in u for h in ("myworkdayjobs.com", "myworkdaysite.com", "icims.com", "taleo.net", "jobs2web.com", "successfactors",
                                 "oraclecloud.com")):
             found = board_from_link(u)
             if found:
@@ -102,34 +103,47 @@ def discover_from_cdx_lines(lines: Iterable[str]) -> set[tuple[str, str]]:
 
 
 CC_HOSTS = ("boards.greenhouse.io/*", "job-boards.greenhouse.io/*", "jobs.lever.co/*", "jobs.ashbyhq.com/*",
+            "jobs.smartrecruiters.com/*", "careers.smartrecruiters.com/*", "*.myworkdaysite.com",
+            "job-boards.eu.greenhouse.io/*", "jobs.eu.lever.co/*",
             "*.myworkdayjobs.com", "*.icims.com", "*.taleo.net", "*.jobs2web.com", "*.successfactors.com",
             "*.oraclecloud.com/hcmUI/CandidateExperience/*", "*.bamboohr.com", "*.recruitee.com",
             "*.jobs.personio.de", "*.breezy.hr", "*.teamtailor.com", "*.applytojob.com", "jobs.jobvite.com/*",
             "ats.rippling.com/*", "recruiting.paylocity.com/recruiting/jobs/*")
 
 
-def discover_common_crawl(crawl_id: str | None = None, max_pages: int = 30, session=None) -> set[tuple[str, str]]:
-    """Ask Common Crawl's free URL index which job boards it has seen. Slow but free; run weekly at most."""
+def discover_common_crawl(crawl_id: str | None = None, max_pages: int = 150, session=None, crawls: int = 2,
+                          minutes: float | None = None, sleep=time.sleep) -> set[tuple[str, str]]:
+    """Ask Common Crawl's free URL index which job boards it has seen, in its latest `crawls` snapshots (boards that
+    weren't crawled last month often were the month before). Paced a second apart; stops at `minutes`."""
     s = session or requests.Session()
     s.headers["User-Agent"] = USER_AGENT
-    if not crawl_id:
-        crawl_id = s.get("https://index.commoncrawl.org/collinfo.json", timeout=30).json()[0]["id"]
-    api = f"https://index.commoncrawl.org/{crawl_id}-index"
+    ids = [crawl_id] if crawl_id else [c["id"] for c in s.get("https://index.commoncrawl.org/collinfo.json",
+                                                              timeout=30).json()[:crawls]]
+    deadline = time.monotonic() + minutes * 60 if minutes else None
     found: set[tuple[str, str]] = set()
-    for host in CC_HOSTS:
-        params = {"url": host, "output": "json"}
-        if host.startswith("*."):
-            params = {"url": host[2:], "matchType": "domain", "output": "json"}
-        try:
-            pages = s.get(api, params={**params, "showNumPages": "true"}, timeout=60).json()
-        except (requests.RequestException, ValueError):
-            log.warning("Common Crawl index didn't answer for %s; skipping it this time", host)
-            continue
-        for page in range(min(int(pages.get("pages", 1)), max_pages)):
-            r = s.get(api, params={**params, "fl": "url", "page": page}, timeout=120)
-            if r.status_code != 200:
-                break
-            found |= discover_from_cdx_lines(r.text.splitlines())
+    for cid in ids:
+        api = f"https://index.commoncrawl.org/{cid}-index"
+        for host in CC_HOSTS:
+            params = {"url": host, "output": "json"}
+            if host.startswith("*."):
+                params = {"url": host[2:], "matchType": "domain", "output": "json"}
+            try:
+                pages = s.get(api, params={**params, "showNumPages": "true"}, timeout=60).json()
+            except (requests.RequestException, ValueError):
+                log.warning("Common Crawl index didn't answer for %s; skipping it this time", host)
+                continue
+            for page in range(min(int(pages.get("pages", 1)), max_pages)):
+                if deadline and time.monotonic() > deadline:
+                    log.info("Common Crawl discovery: time's up with %s boards", len(found))
+                    return found
+                try:
+                    r = s.get(api, params={**params, "fl": "url", "page": page}, timeout=120)
+                except requests.RequestException:
+                    break
+                if r.status_code != 200:
+                    break
+                found |= discover_from_cdx_lines(r.text.splitlines())
+                sleep(1.0)  # one request a second: Common Crawl's index is a shared, free service
     return found
 
 

@@ -142,6 +142,42 @@ def shared_job(url: str, title: str, location: str = "", description: str = "", 
                description=(description or "")[:20000])
 
 
+# Search links into big employers' own careers sites, built from a member's titles and level. jobfeed never fetches
+# these pages: the member clicks through and searches there. What they save comes back as a shared posting.
+SEARCH_LINKS = {
+    "Google": "https://www.google.com/about/careers/applications/jobs/results/?q={q}&location=United%20States{google_level}",
+    "Amazon": "https://www.amazon.jobs/en/search?base_query={q}&loc_query=United%20States",
+    "Meta": "https://www.metacareers.com/jobs?q={q}",
+    "Apple": "https://jobs.apple.com/en-us/search?search={q}&location=united-states-USA{apple_level}",
+    "Microsoft": "https://apply.careers.microsoft.com/careers?query={q}&location=United%20States",
+    "Netflix": "https://explore.jobs.netflix.net/careers?query={q}",
+    "TikTok": "https://lifeattiktok.com/search?keyword={q}",
+    "Tesla": "https://www.tesla.com/careers/search/?query={q}&country=US",
+}
+
+
+def search_links(titles: list[str], levels: list[str] | None = None, limit_titles: int = 2) -> list[dict]:
+    """[{title, links: [{company, url}]}] for a member's first titles. Interns get internship searches."""
+    from urllib.parse import quote
+    levels = set(levels or [])
+    intern_only = bool(levels) and levels <= {"intern"}
+    google_level = ("&target_level=INTERN_AND_APPRENTICE" if intern_only else
+                    "&target_level=EARLY" if levels and levels <= {"intern", "entry"} else "")
+    apple_level = "&team=internships-STDNT-INTRN" if intern_only else ""
+    out = []
+    for title in [t.strip() for t in titles if t and t.strip()][:limit_titles]:
+        words = re.sub(r"\s+", " ", title)
+        q = words + (" intern" if intern_only and "intern" not in words.lower() else "")
+        links = []
+        for company, tpl in SEARCH_LINKS.items():
+            # Google and Apple filter by level themselves; elsewhere the word "intern" does it
+            qq = words if company in ("Google",) or (company == "Apple" and intern_only) else q
+            links.append({"company": company, "url": tpl.format(q=quote(qq), google_level=google_level,
+                                                                 apple_level=apple_level)})
+        out.append({"title": title, "links": links})
+    return out
+
+
 def _register():
     from jobfeed import sources
     sources.FETCHERS["google"] = fetch_google
