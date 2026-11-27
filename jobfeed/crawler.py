@@ -14,12 +14,14 @@ import requests
 
 from jobfeed.index import JobIndex, pretty_company
 from jobfeed.careers import CAREER_ATS
+from jobfeed.smb import ANY_ATS
 from jobfeed.sources import FETCHERS, BoardError
 
 log = logging.getLogger("jobfeed.crawler")
 
 WORKERS = {"greenhouse": 8, "ashby": 4, "lever": 3, "workday": 12, "icims": 12, "successfactors": 4, "taleo": 4,
-           "oracle": 4}  # Lever is still paced to one request a second
+           "oracle": 4, "bamboohr": 8, "paylocity": 4, "recruitee": 4, "personio": 4, "breezy": 4, "teamtailor": 4,
+           "jazzhr": 4, "jobvite": 4, "rippling": 4, "adp": 4, "ukg": 4, "paycom": 4, "dayforce": 4, "jsonld": 12}  # Lever is still paced to one request a second
 
 
 class _Spacer:
@@ -36,7 +38,9 @@ class _Spacer:
             self.last = time.monotonic()
 
 
-ALL_ATS = ("greenhouse", "ashby", "lever", "workday", "icims", "successfactors", "taleo", "oracle")
+ALL_ATS = ("greenhouse", "ashby", "lever", "workday", "icims", "successfactors", "taleo", "oracle",
+           "bamboohr", "paylocity", "recruitee", "personio", "breezy", "teamtailor",
+           "jazzhr", "jobvite", "rippling", "adp", "ukg", "paycom", "dayforce", "jsonld")
 
 
 def crawl(index: JobIndex, fetchers=FETCHERS, ats: tuple[str, ...] = ALL_ATS,
@@ -63,7 +67,7 @@ def crawl(index: JobIndex, fetchers=FETCHERS, ats: tuple[str, ...] = ALL_ATS,
                 return row, None, "stopped"
             spacer.wait()
             try:
-                if platform in CAREER_ATS:  # careers sites: pass what we know so job pages aren't re-read
+                if platform in CAREER_ATS or platform in ANY_ATS:  # pass what we know: pages aren't re-read
                     return row, fetch(row["board"], row["company"] or "", session=session,
                                       existing=index.existing_for(platform, row["board"])), None
                 return row, fetch(row["board"], row["company"] or "", session=session), None

@@ -7,6 +7,10 @@ A daily, public job index built by GitHub Actions:
 - careers sites on Workday (~12,000), iCIMS (~6,900), SuccessFactors, Taleo and Oracle Recruiting, read the way
   search engines read them: the public sitemap plus each job page's schema.org JobPosting markup, honoring
   robots.txt, one request a second per site, at most 25,000 new job pages a day (US first)
+- BambooHR, Paylocity, Recruitee, Personio, Breezy and Teamtailor public job feeds; JazzHR, Jobvite, Rippling,
+  ADP, UKG, Paycom and Dayforce sites; and any employer site that marks up its jobs for Google (found through
+  Web Data Commons' JobPosting extract of Common Crawl when the workflow is run with "long tail" ticked).
+  Pages without job markup are skipped, never guessed at
 - Workable's public job feed (US) and Hacker News "Who is hiring?" (USAJOBS is left out on purpose: its terms
   don't allow republishing, so the app fetches it privately with its own key)
 - Department of Labor H-1B filings, refreshed when a new quarter is published

@@ -39,7 +39,9 @@ def main(argv=None) -> int:
     sub.add_parser("streams")
     s = sub.add_parser("sponsors")
     s.add_argument("--force", action="store_true")
-    sub.add_parser("discover")
+    dsc = sub.add_parser("discover")
+    dsc.add_argument("--wdc", default=os.environ.get("WDC_JOBPOSTING_URLS", ""),
+                     help="comma-separated Web Data Commons JobPosting N-Quads file URLs")
     f = sub.add_parser("finish")
     f.add_argument("--out", default="index.db.gz")
     f.add_argument("--summary", default="summary.json")
@@ -71,8 +73,16 @@ def main(argv=None) -> int:
         found = streams.discover_common_crawl()
         for ats, b in found:
             idx.add_board(ats, b, origin="discovered")
-        idx.set_meta("last_discover", {"at": now_iso()[:10], "found": len(found)})
-        print(json.dumps({"found": len(found)}))
+        sites = {}
+        for u in [x.strip() for x in args.wdc.split(",") if x.strip()]:
+            try:
+                sites.update(streams.discover_wdc(u))
+            except Exception as exc:
+                print(f"WDC file skipped: {exc}")
+        for host in sites:
+            idx.add_board("jsonld", f"https://{host}", origin="discovered")
+        idx.set_meta("last_discover", {"at": now_iso()[:10], "found": len(found), "sites": len(sites)})
+        print(json.dumps({"found": len(found), "sites_with_job_markup": len(sites)}))
         return 0
     if args.cmd == "finish":
         started = time.monotonic()

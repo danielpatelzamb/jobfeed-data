@@ -3,7 +3,12 @@ name: daily job data
 on:
   schedule:
     - cron: "11 8 * * *"   # 08:11 UTC, about 3am New York: published before the app's 7am run
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      long_tail:
+        description: "Also add every employer site with job markup from Web Data Commons (about 60,000 sites; adds ~30 min)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write          # to publish the release files
@@ -49,7 +54,12 @@ jobs:
       - name: Find new company boards (Mondays, or when run by hand)
         run: |
           if [ "$(date -u +%u)" = "1" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            python -m jobfeed.datajob discover || echo "discovery skipped"
+            WDC=""
+            if [ "${{ inputs.long_tail }}" = "true" ]; then
+              base=https://data.dws.informatik.uni-mannheim.de/structureddata/2024-12/quads/classspecific/JobPosting
+              WDC=$(for i in $(seq 0 13); do printf "%s/part_%s.gz," "$base" "$i"; done)
+            fi
+            python -m jobfeed.datajob discover --wdc "$WDC" || echo "discovery skipped"
           fi
 
       - name: Signals, cleanup and export

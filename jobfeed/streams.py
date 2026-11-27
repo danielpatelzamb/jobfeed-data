@@ -43,12 +43,17 @@ _ANY_URL = re.compile(r"https?://[^\s\"'<>)]+", re.I)
 def discover_boards(text: str) -> set[tuple[str, str]]:
     """Job boards and careers sites (Greenhouse, Lever, Ashby, Workday, iCIMS, Taleo, SuccessFactors, Oracle)
     linked anywhere in some text."""
+    from jobfeed import smb
     from jobfeed.careers import board_from_link
     out = set()
     for u in _ANY_URL.findall(html.unescape(text or "")):
         if any(h in u for h in ("myworkdayjobs.com", "icims.com", "taleo.net", "jobs2web.com", "successfactors",
                                 "oraclecloud.com")):
             found = board_from_link(u)
+            if found:
+                out.add(found)
+        else:
+            found = smb.board_from_link(u)
             if found:
                 out.add(found)
     for m in _BOARD_URL.finditer(html.unescape(text or "")):
@@ -73,7 +78,9 @@ def discover_from_cdx_lines(lines: Iterable[str]) -> set[tuple[str, str]]:
 
 CC_HOSTS = ("boards.greenhouse.io/*", "job-boards.greenhouse.io/*", "jobs.lever.co/*", "jobs.ashbyhq.com/*",
             "*.myworkdayjobs.com", "*.icims.com", "*.taleo.net", "*.jobs2web.com", "*.successfactors.com",
-            "*.oraclecloud.com/hcmUI/CandidateExperience/*")
+            "*.oraclecloud.com/hcmUI/CandidateExperience/*", "*.bamboohr.com", "*.recruitee.com",
+            "*.jobs.personio.de", "*.breezy.hr", "*.teamtailor.com", "*.applytojob.com", "jobs.jobvite.com/*",
+            "ats.rippling.com/*", "recruiting.paylocity.com/recruiting/jobs/*")
 
 
 def discover_common_crawl(crawl_id: str | None = None, max_pages: int = 30, session=None) -> set[tuple[str, str]]:
@@ -95,6 +102,48 @@ def discover_common_crawl(crawl_id: str | None = None, max_pages: int = 30, sess
                 break
             found |= discover_from_cdx_lines(r.text.splitlines())
     return found
+
+
+# ---------- Web Data Commons: every site with job markup ----------
+# Web Data Commons (University of Mannheim) extracts schema.org data from Common Crawl and publishes a
+# JobPosting subset as N-Quads, where the 4th term of each line is the page the markup came from.
+
+_QUAD = re.compile(r'^(\S+) <http://www\.w3\.org/1999/02/22-rdf-syntax-ns#type> <https?://schema\.org/JobPosting> <([^>]+)>')
+_KNOWN = ("greenhouse.io", "lever.co", "ashbyhq.com", "myworkdayjobs.com", "icims.com", "taleo.net", "bamboohr.com",
+          "recruitee.com", "personio.de", "breezy.hr", "teamtailor.com", "workable.com", "linkedin.com", "indeed.",
+          "glassdoor.", "ziprecruiter.", "monster.", "simplyhired.", "careerbuilder.")
+
+
+def sites_from_wdc_lines(lines: Iterable[str], min_pages: int = 3) -> dict[str, int]:
+    """Hosts that published job markup on at least `min_pages` pages (job boards and known systems excluded:
+    those are read through their own feeds, and aggregators only copy employers' postings)."""
+    from collections import Counter
+    from urllib.parse import urlparse
+    count: Counter = Counter()
+    for line in lines:
+        m = _QUAD.match(line)
+        if not m:
+            continue
+        host = urlparse(m.group(2)).netloc.lower()
+        if host and not any(k in host for k in _KNOWN):
+            count[host] += 1
+    return {h: n for h, n in count.items() if n >= min_pages}
+
+
+def discover_wdc(url: str, max_lines: int = 50_000_000, session=None) -> dict[str, int]:
+    """Stream a (gzipped) WDC JobPosting N-Quads file and return employer sites with job markup."""
+    s = session or requests.Session()
+    with s.get(url, stream=True, timeout=(30, 600), headers={"User-Agent": USER_AGENT}) as r:
+        r.raise_for_status()
+        raw = r.raw
+        stream = gzip.GzipFile(fileobj=raw) if url.endswith(".gz") else raw
+
+        def lines():
+            for i, b in enumerate(stream):
+                if i >= max_lines:
+                    break
+                yield b.decode("utf-8", "replace")
+        return sites_from_wdc_lines(lines())
 
 
 # ---------- Hacker News: Who is hiring? ----------

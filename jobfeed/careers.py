@@ -297,6 +297,8 @@ def sitemap_starts(ats: str, board: str) -> tuple[str, list[str]]:
 
 
 _JOBISH = re.compile(r"/job/|/jobs/\d|jobdetail\.ftl|/requisitions/preview/|/job-detail/", re.I)
+_JOBISH_ANY = re.compile(r"/(?:jobs?|careers?|positions?|openings?|vacanc(?:y|ies)|requisitions?|job-detail)/[^?#]*"
+                         r"(?:\d|[a-z]-[a-z])", re.I)
 
 
 def fetch_careersite(ats: str, board: str, company: str = "", session=None, existing: dict | None = None,
@@ -312,7 +314,8 @@ def fetch_careersite(ats: str, board: str, company: str = "", session=None, exis
         starts = declared + [u for u in starts if u not in declared]
     if not allowed(s, starts[0]):
         raise BoardError("robots.txt doesn't allow reading this site's sitemap")
-    entries = read_sitemaps(s, starts, keep=lambda u: bool(_JOBISH.search(u)) and not u.endswith("/jobs/intro"))
+    rx = _JOBISH if ats in ("workday", "icims", "successfactors", "taleo", "oracle") else _JOBISH_ANY
+    entries = read_sitemaps(s, starts, keep=lambda u: bool(rx.search(u)) and not u.endswith("/jobs/intro"))
     parse_url = {"workday": workday_from_url, "icims": icims_from_url}.get(ats, generic_from_url)
     existing = existing or {}
     name = company or _company_from_board(ats, board)
@@ -334,8 +337,8 @@ def fetch_careersite(ats: str, board: str, company: str = "", session=None, exis
                 if "bot check" in str(exc):
                     budget = fetched  # stop reading pages from this site today
         title = detail.get("title") or info["title"] or (old["title"] if old else "")
-        if not title:
-            continue
+        if not title or (ats == "jsonld" and not old and not detail.get("description")):
+            continue  # an arbitrary site: only pages with real job markup count
         jobs.append(Job(
             source=ats, board=board, job_id=str(info["id"]), company=(detail.get("company") or name).strip()[:120],
             title=title[:200], url=url, location=(detail.get("location") or info["location"]

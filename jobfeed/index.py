@@ -186,14 +186,15 @@ class JobIndex:
         """Add the bundled company list (boards already known keep their state)."""
         added = 0
         with self.lock:
-            for ats in ("greenhouse", "lever", "ashby", "workday", "icims"):
+            for ats in ("greenhouse", "lever", "ashby", "workday", "icims", "bamboohr", "paylocity"):
                 path = os.path.join(directory_dir, f"{ats}.json")
                 if not os.path.exists(path):
                     continue
                 with open(path, encoding="utf-8") as f:
                     boards = json.load(f)
-                cur = self.db.executemany("INSERT OR IGNORE INTO boards (ats, board) VALUES (?, ?)",
-                                          [(ats, b) for b in boards])
+                rows = [(ats, b["board"], b.get("company") or None) if isinstance(b, dict) else (ats, b, None)
+                        for b in boards]
+                cur = self.db.executemany("INSERT OR IGNORE INTO boards (ats, board, company) VALUES (?, ?, ?)", rows)
                 added += cur.rowcount
             self.db.commit()
         return added
@@ -207,8 +208,10 @@ class JobIndex:
                             (ats, board, company, origin))
             self.db.commit()
 
-    def due_boards(self, ats: tuple[str, ...] = ("greenhouse", "lever", "ashby", "workday", "icims", "successfactors",
-                                                 "taleo", "oracle"), limit: int | None = None):
+    def due_boards(self, ats: tuple[str, ...] | None = None, limit: int | None = None):
+        if ats is None:
+            from jobfeed.crawler import ALL_ATS
+            ats = ALL_ATS
         q = (f"SELECT ats, board, company FROM boards WHERE ats IN ({','.join('?' * len(ats))}) "
              "AND (next_try IS NULL OR next_try <= ?) ORDER BY origin != 'user', status != 'ok', ats, board")
         args = [*ats, now_iso()]
