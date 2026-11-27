@@ -33,7 +33,8 @@ log = logging.getLogger("jobfeed.streams")
 _BOARD_URL = re.compile(
     r"https?://(?:(?:boards|job-boards)(?:\.eu)?\.greenhouse\.io/(?:embed/job_board\?for=)?(?P<gh>[A-Za-z0-9_-]+)"
     r"|jobs\.(?:eu\.)?lever\.co/(?P<lv>[A-Za-z0-9._-]+)"
-    r"|jobs\.ashbyhq\.com/(?P<ab>[A-Za-z0-9._%-]+))", re.I)
+    r"|jobs\.ashbyhq\.com/(?P<ab>[A-Za-z0-9._%-]+)"
+    r"|(?:jobs|careers)\.smartrecruiters\.com/(?P<sr>[A-Za-z0-9_-]+))", re.I)
 _NOT_BOARD = {"embed", "jobs", "api", "v1", "static", "assets", "favicon.ico", "robots.txt", "sitemap.xml"}
 
 
@@ -57,10 +58,34 @@ def discover_boards(text: str) -> set[tuple[str, str]]:
             if found:
                 out.add(found)
     for m in _BOARD_URL.finditer(html.unescape(text or "")):
-        for ats, group in (("greenhouse", "gh"), ("lever", "lv"), ("ashby", "ab")):
+        for ats, group in (("greenhouse", "gh"), ("lever", "lv"), ("ashby", "ab"), ("smartrecruiters", "sr")):
             slug = m.group(group)
             if slug and slug.lower() not in _NOT_BOARD:
                 out.add((ats, slug.strip(".").replace("%20", " ") if ats == "ashby" else slug.strip(".")))
+    return out
+
+
+# Public, community-kept internship and new-grad lists on GitHub. Only the employer links are read from them (which
+# job boards and careers sites companies use); none of their rows, titles or wording is copied. Each role is then
+# read from the employer's own board. Add or remove lists with LINK_LISTS (comma-separated raw JSON/Markdown URLs).
+LINK_LISTS = (
+    "https://raw.githubusercontent.com/SimplifyJobs/Summer2026-Internships/dev/.github/scripts/listings.json",
+    "https://raw.githubusercontent.com/SimplifyJobs/New-Grad-Positions/dev/.github/scripts/listings.json",
+)
+
+
+def discover_link_lists(urls=None, session=None) -> set[tuple[str, str]]:
+    import os
+    urls = urls or [u for u in os.environ.get("LINK_LISTS", ",".join(LINK_LISTS)).split(",") if u.strip()]
+    s = session or requests.Session()
+    out: set[tuple[str, str]] = set()
+    for u in urls:
+        try:
+            r = s.get(u.strip(), timeout=60, headers={"User-Agent": USER_AGENT})
+            if r.status_code == 200:
+                out |= discover_boards(r.text)
+        except requests.RequestException:
+            continue  # one missing list never stops discovery
     return out
 
 

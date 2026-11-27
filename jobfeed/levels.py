@@ -22,6 +22,16 @@ _ENTRY = _rx([r"junior", r"jr\.?", r"entry", r"entry[- ]level", r"new grad", r"g
               r"campus", r"class of 20\d\d", r"20\d\d start", r"university grad"])
 # "Associate" alone is entry in finance; "Associate Director" is not. Senior words win.
 
+# "Manager" is a seniority word only for people managers. Product, program, project, account, marketing (and similar)
+# managers are individual roles hired at every level, including "Associate Product Manager" for new grads.
+_IC_MANAGER = re.compile(r"(?<![a-z])(?:technical |associate |assistant |junior |jr\.? )?(?:product|program|project|"
+                         r"account|marketing|product marketing|brand|community|content|campaign|growth|social media|"
+                         r"category|partner(?:ship)?s?|customer success|success|client|case|office|lifecycle|channel|"
+                         r"merchandising|events?|implementation|operations program|release|ecommerce|e-commerce|"
+                         r"crm|seo|digital marketing|influencer|retention|pricing) managers?(?![a-z])")
+_PEOPLE_MANAGER = re.compile(r"(?<![a-z])(group|general|engineering|people|regional|district|area|senior|sr\.?) "
+                             r"(product |program )?managers?(?![a-z])|managers? of(?![a-z])")
+
 
 # Most titles carry no seniority word ("Software Engineer", "Data Analyst"); level_of calls those "mid", and weak
 # words like "Analyst" or "Associate" make a title "entry". Neither is a real statement about the role, so a search
@@ -49,7 +59,9 @@ def level_of(title: str) -> str:
     t = (title or "").lower()
     if _INTERN.search(t) and "international" not in t.replace("intern ", ""):
         return "intern"
-    if _SENIOR.search(t):
+    if _PEOPLE_MANAGER.search(t):
+        return "senior"
+    if _SENIOR.search(_IC_MANAGER.sub(" ", t)):
         return "senior"
     if _ENTRY.search(t):
         return "entry"

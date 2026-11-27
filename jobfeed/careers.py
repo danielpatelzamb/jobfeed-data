@@ -57,11 +57,16 @@ _host_lock = threading.Lock()
 
 
 # Workday rate-limits by the caller across a whole cluster (wd1, wd5...), not per company site. So besides one
-# request a second per site, keep each cluster at CLUSTER_GAP seconds between requests, and once a cluster has said
-# "too many requests" CLUSTER_STOP times in a run, leave it alone until the next run (those boards retry tomorrow).
-CLUSTER_GAP = 0.6
-CLUSTER_STOP = 15
+# request a second per site, each cluster has its own pace: it starts at CLUSTER_GAP seconds between requests,
+# doubles (up to CLUSTER_GAP_MAX) every time Workday says "too many requests", waits out any Retry-After, and eases
+# back toward the start pace after successes. Only after CLUSTER_STOP "slow down" replies in a row at the slowest
+# pace does the cluster rest until the next run; its boards aren't marked as failing (they just stay due).
+CLUSTER_GAP = 1.0
+CLUSTER_GAP_MAX = 8.0
+CLUSTER_STOP = 12
+PAUSED = "paused until the next run"
 _cluster_429: dict[str, int] = {}
+_cluster_gap: dict[str, float] = {}
 
 
 def _cluster(url: str) -> str:
@@ -72,6 +77,7 @@ def _cluster(url: str) -> str:
 def reset_run_limits():
     with _host_lock:
         _cluster_429.clear()
+        _cluster_gap.clear()
 
 
 def _polite(url: str, gap: float = 1.0, key: str = ""):
@@ -88,16 +94,29 @@ def _get(session, url: str, accept: str = "*/*") -> requests.Response:
     cluster = _cluster(url)
     if cluster:
         if _cluster_429.get(cluster, 0) >= CLUSTER_STOP:
-            raise BoardError("HTTP 429: Workday asked us to slow down; paused until the next run")
-        _polite(url, CLUSTER_GAP, key=cluster)
+            raise BoardError(f"HTTP 429: Workday asked us to slow down; {PAUSED}")
+        _polite(url, _cluster_gap.get(cluster, CLUSTER_GAP), key=cluster)
     _polite(url)
     try:
         r = (session or requests).get(url, timeout=TIMEOUT, headers={"User-Agent": USER_AGENT, "Accept": accept})
     except requests.RequestException as exc:
         raise BoardError(f"request failed: {exc}") from exc
-    if cluster and r.status_code == 429:
+    if cluster:
+        wait = 0.0
         with _host_lock:
-            _cluster_429[cluster] = _cluster_429.get(cluster, 0) + 1
+            gap = _cluster_gap.get(cluster, CLUSTER_GAP)
+            if r.status_code == 429:
+                _cluster_gap[cluster] = min(gap * 2, CLUSTER_GAP_MAX)
+                if gap >= CLUSTER_GAP_MAX:  # only count refusals once we're already at the slowest pace
+                    _cluster_429[cluster] = _cluster_429.get(cluster, 0) + 1
+                try:
+                    wait = min(float(r.headers.get("Retry-After") or 0), 60.0)
+                except ValueError:
+                    wait = 0.0
+                _host_next[cluster] = max(_host_next.get(cluster, 0.0), time.monotonic() + wait)
+            else:
+                _cluster_429[cluster] = 0
+                _cluster_gap[cluster] = max(CLUSTER_GAP, gap * 0.95)
     if r.status_code == 404:
         raise BoardError("board not found (404)")
     if r.status_code in (403, 429, 503) and ("cf-mitigated" in {k.lower() for k in r.headers}
@@ -386,9 +405,16 @@ def _company_from_board(ats: str, board: str) -> str:
     return parts[0] if parts else host
 
 
+# Workday URLs already carry the title, place and job id, so the daily crawl reads only robots.txt and the sitemap
+# (two or three requests per company instead of a hundred); describe.py fetches a job page later, only for roles
+# that land in someone's feed. That is what lets every Workday company fit in one polite run.
+SITEMAP_ONLY = {"workday"}
+
+
 def make_fetcher(ats: str):
     def fetch(board: str, company: str = "", session=None, existing=None):
-        return fetch_careersite(ats, board, company, session=session, existing=existing)
+        return fetch_careersite(ats, board, company, session=session, existing=existing,
+                                budget=0 if ats in SITEMAP_ONLY else DETAIL_BUDGET)
     return fetch
 
 

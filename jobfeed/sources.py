@@ -177,10 +177,55 @@ def fetch_ashby(board: str, company: str = "", session=None) -> list[Job]:
     return parse_ashby(_get_json(ASHBY_URL.format(board=board), session), board, company)
 
 
+# SmartRecruiters' Posting API: documented, no key needed for public postings (only internal ones need a token).
+SMARTRECRUITERS_URL = "https://api.smartrecruiters.com/v1/companies/{board}/postings?limit=100&offset={offset}"
+SMARTRECRUITERS_MAX_PAGES = 30
+
+
+def parse_smartrecruiters(data: dict, board: str, company: str) -> list[Job]:
+    jobs = []
+    for p in data.get("content") or []:
+        loc = p.get("location") or {}
+        place = loc.get("fullLocation") or ", ".join(x for x in (loc.get("city"), loc.get("region"),
+                                                                    (loc.get("country") or "").upper()) if x)
+        remote = bool(loc.get("remote"))
+        if remote and "remote" not in place.lower():
+            place = f"{place} (Remote)" if place else "Remote"
+        kind = ((p.get("typeOfEmployment") or {}).get("label") or "")
+        jobs.append(Job(
+            source="smartrecruiters", board=board, job_id=str(p.get("id") or p.get("uuid") or ""),
+            company=company or ((p.get("company") or {}).get("name") or board),
+            title=(p.get("name") or "").strip(),
+            url=f"https://jobs.smartrecruiters.com/{board}/{p.get('id')}",
+            location=place, department=((p.get("department") or {}).get("label") or
+                                        (p.get("function") or {}).get("label") or ""),
+            remote=remote, posted_at=p.get("releasedDate") or "",
+            extra={"employment": kind} if kind else {}))
+    return [j for j in jobs if j.job_id and j.title]
+
+
+def fetch_smartrecruiters(board: str, company: str = "", session=None) -> list[Job]:
+    import time as _t
+    out: list[Job] = []
+    for page in range(SMARTRECRUITERS_MAX_PAGES):
+        data = _get_json(SMARTRECRUITERS_URL.format(board=board, offset=page * 100), session)
+        if not isinstance(data, dict):
+            raise BoardError("response was not JSON")
+        batch = parse_smartrecruiters(data, board, company)
+        out += batch
+        if len(data.get("content") or []) < 100 or len(out) >= (data.get("totalFound") or 0):
+            break
+        _t.sleep(0.5)  # gentle between pages of one company
+    if not out and not (data.get("totalFound") or 0) and page == 0 and data.get("content") is None:
+        raise BoardError("board not found (404)")
+    return out
+
+
 FETCHERS: dict[str, Callable[..., list[Job]]] = {
     "greenhouse": fetch_greenhouse,
     "lever": fetch_lever,
     "ashby": fetch_ashby,
+    "smartrecruiters": fetch_smartrecruiters,
 }
 
 

@@ -19,7 +19,7 @@ from jobfeed.sources import FETCHERS, BoardError
 
 log = logging.getLogger("jobfeed.crawler")
 
-WORKERS = {"greenhouse": 5, "ashby": 4, "lever": 3, "workday": 4, "icims": 12, "successfactors": 4, "taleo": 4,
+WORKERS = {"greenhouse": 5, "ashby": 4, "lever": 3, "smartrecruiters": 3, "workday": 4, "icims": 12, "successfactors": 4, "taleo": 4,
            "oracle": 4, "bamboohr": 8, "paylocity": 4, "recruitee": 4, "personio": 4, "breezy": 4, "teamtailor": 4,
            "jazzhr": 4, "jobvite": 4, "rippling": 4, "adp": 4, "ukg": 4, "paycom": 4, "dayforce": 4, "jsonld": 12}  # Lever is still paced to one request a second
 
@@ -38,14 +38,14 @@ class _Spacer:
             self.last = time.monotonic()
 
 
-ALL_ATS = ("greenhouse", "ashby", "lever", "workday", "icims", "successfactors", "taleo", "oracle",
+ALL_ATS = ("greenhouse", "ashby", "lever", "smartrecruiters", "workday", "icims", "successfactors", "taleo", "oracle",
            "bamboohr", "paylocity", "recruitee", "personio", "breezy", "teamtailor",
            "jazzhr", "jobvite", "rippling", "adp", "ukg", "paycom", "dayforce", "jsonld")
 
 
 # Platform groups crawled side by side as separate jobs in the data workflow (each on its own machine).
 GROUPS = {
-    "boards": ("greenhouse", "lever"),
+    "boards": ("greenhouse", "lever", "smartrecruiters"),
     "startups": ("ashby", "bamboohr", "paylocity", "recruitee", "personio", "breezy", "teamtailor"),
     "workday": ("workday",),
     "enterprise": ("icims", "successfactors", "taleo", "oracle"),
@@ -100,7 +100,10 @@ def crawl(index: JobIndex, fetchers=FETCHERS, ats: tuple[str, ...] = ALL_ATS,
         with ThreadPoolExecutor(max_workers=max(1, workers.get(platform, 2))) as pool:
             for fut in as_completed([pool.submit(one, r) for r in todo]):
                 row, jobs, err = fut.result()
-                if err == "stopped":
+                if err == "stopped" or (err and "paused until the next run" in err):
+                    if err != "stopped":  # the platform asked us to slow down: not this board's fault, stays due
+                        with tl:
+                            totals["paused"] = totals.get("paused", 0) + 1
                     continue
                 if err is not None:
                     dead = "404" in err

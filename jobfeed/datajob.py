@@ -47,6 +47,7 @@ def main(argv=None) -> int:
     s = sub.add_parser("sponsors")
     s.add_argument("--force", action="store_true")
     dsc = sub.add_parser("discover")
+    dsc.add_argument("--lists-only", action="store_true", help="only the community internship/new-grad lists")
     dsc.add_argument("--wdc", default=os.environ.get("WDC_JOBPOSTING_URLS", ""),
                      help="comma-separated Web Data Commons JobPosting N-Quads file URLs")
     au = sub.add_parser("audit")
@@ -109,6 +110,13 @@ def main(argv=None) -> int:
         return 0
     if args.cmd == "discover":
         from jobfeed import streams
+        listed = streams.discover_link_lists()  # new internship/new-grad postings appear here daily
+        for ats, b in listed:
+            idx.add_board(ats, b, origin="discovered")
+        if args.lists_only:
+            idx.set_meta("last_lists", {"at": now_iso(), "boards": len(listed)})
+            print(json.dumps({"boards_from_lists": len(listed)}))
+            return 0
         try:
             found = streams.discover_common_crawl()
         except Exception as exc:
@@ -149,6 +157,8 @@ def main(argv=None) -> int:
         idx.refresh_board_stats()
         pruned = idx.prune()
         from jobfeed import names
+        releveled = idx.relevel()  # titles whose level the rules now read differently ("Product Manager")
+        print(json.dumps({"releveled": releveled}))
         renamed = names.fix_index(idx)  # "davispolk" -> "Davis Polk" where the index itself shows the real name
         print(f"readable company names: {renamed}")
         if idx.count_open() == 0:

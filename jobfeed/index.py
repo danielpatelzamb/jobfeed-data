@@ -211,6 +211,16 @@ class JobIndex:
                             (ats, board, company, origin))
             self.db.commit()
 
+    def relevel(self, like: str = "%manager%") -> int:
+        """Recompute stored levels for titles matching `like` after the level rules change (re-crawls do it anyway;
+        this catches roles on boards that weren't due today)."""
+        rows = self._q("SELECT id, title, level FROM postings WHERE open = 1 AND lower(title) LIKE ?", (like,))
+        changed = [(lv, r["id"]) for r in rows if (lv := level_of(r["title"])) != r["level"]]
+        with self.lock:
+            self.db.executemany("UPDATE postings SET level = ? WHERE id = ?", changed)
+            self.db.commit()
+        return len(changed)
+
     def due_boards(self, ats: tuple[str, ...] | None = None, limit: int | None = None):
         if ats is None:
             from jobfeed.crawler import ALL_ATS
@@ -218,7 +228,8 @@ class JobIndex:
         q = (f"SELECT ats, board, company FROM boards WHERE ats IN ({','.join('?' * len(ats))}) "
              "AND (next_try IS NULL OR next_try <= ? OR (status = 'failing' AND error_class IS NULL)) "
              # failures recorded before errors were classified (and before polite retries) get one fresh try
-             "ORDER BY origin != 'user', status != 'ok', ats, board")
+             # least recently tried first, so boards a slowed-down run didn't reach go first next time
+             "ORDER BY origin != 'user', last_tried IS NOT NULL, last_tried, status != 'ok', ats, board")
         args = [*ats, now_iso()]
         if limit:
             q += " LIMIT ?"

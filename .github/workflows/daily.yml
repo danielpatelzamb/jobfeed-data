@@ -26,7 +26,7 @@ jobs:
         include:
           - {group: boards,     pages: "25000", workers: "0"}
           - {group: startups,   pages: "25000", workers: "0"}
-          - {group: workday,    pages: "60000", workers: "24"}
+          - {group: workday,    pages: "60000", workers: "8"}
           - {group: enterprise, pages: "40000", workers: "0"}
           - {group: longtail,   pages: "40000", workers: "0"}
     runs-on: ubuntu-latest
@@ -100,6 +100,9 @@ jobs:
 
       - name: Visa sponsorship (new DOL file each quarter)
         run: python -m jobfeed.datajob sponsors
+
+      - name: Boards behind new internship and new-grad listings (daily; links only, roles come from employers)
+        run: python -m jobfeed.datajob discover --lists-only || echo "list discovery skipped"
 
       - name: Find new company boards (Mondays, or when run by hand)
         run: |
