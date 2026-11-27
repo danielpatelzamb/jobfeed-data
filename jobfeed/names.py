@@ -22,6 +22,11 @@ def known_names(index) -> dict[str, str]:
         key = re.sub(r"[^a-z0-9]", "", name.lower())
         if len(key) >= 5:
             out.setdefault(key, name)
+    # one-word names with the employer's own capitals ("OpenAI", "SpaceX", "HubSpot") beat our guesses
+    for row in index._q("SELECT DISTINCT company FROM postings WHERE company NOT LIKE '% %'"):
+        name = (row["company"] or "").strip()
+        if re.search(r"[a-z][A-Z]", name) and re.fullmatch(r"[A-Za-z0-9]{4,40}", name):
+            out.setdefault(name.lower(), name)
     return out
 
 
@@ -40,7 +45,7 @@ def vocab(index, limit: int = 400_000) -> Counter:
 def split(slug: str, freq: Counter) -> list[str] | None:
     """Most likely words for a lowercase slug, or None if any piece is unknown/too short to trust."""
     s = slug.lower()
-    total = sum(freq.values()) or 1
+    total = getattr(freq, "_total", None) or sum(freq.values()) or 1
     n = len(s)
     best = [(0.0, -1)] + [(-math.inf, -1)] * n
     for i in range(1, n + 1):
@@ -77,6 +82,37 @@ def split(slug: str, freq: Counter) -> list[str] | None:
     return merged
 
 
+# common last words of company names: "sedarotech" -> "Sedaro Tech", "asuresoftware" -> "Asure Software"
+SUFFIXES = ("software", "softwares", "technologies", "technology", "tech", "systems", "system", "solutions", "studios",
+            "studio", "engineering", "engineers", "consulting", "consultants", "construction", "intelligence", "imaging",
+            "aerospace", "robotics", "therapeutics", "biosciences", "bio", "health", "healthcare", "medical", "labs",
+            "lab", "group", "partners", "capital", "ventures", "holdings", "industries", "energy", "power", "solar",
+            "media", "digital", "marketing", "analytics", "data", "networks", "security", "logistics", "foods",
+            "brands", "decisions", "insurance", "financial", "bank", "services", "global", "international", "usa",
+            "llc", "inc", "corp", "co", "ai", "io", "hq", "games", "motors", "pharma", "design", "designs",
+            "architects", "builders", "homes", "properties", "realty", "law", "legal", "academy", "school", "schools")
+_UPPER_WORDS = {"ai", "llc", "inc", "usa", "io", "hq", "us"}
+
+
+def _suffix_split(slug: str, freq: Counter) -> list[str] | None:
+    for suf in sorted(SUFFIXES, key=len, reverse=True):
+        if slug.endswith(suf) and len(slug) - len(suf) >= 3:
+            head = slug[: -len(suf)]
+            inner = split(head, freq) if len(head) >= 6 else None
+            if not inner and len(head) > 6 and head.endswith("and"):
+                inner = [head[:-3], "and"]  # "sunlightandpower" -> Sunlight and Power
+            if not inner:
+                inner = _suffix_split(head, freq) or [head.upper() if len(head) <= 3 else head]
+            return inner + [suf]
+    return None
+
+
+def _cap(w: str) -> str:
+    if w == "and":
+        return w
+    return w.upper() if w in _UPPER_WORDS or w.isupper() else (w if w.isdigit() else w[:1].upper() + w[1:])
+
+
 def pretty(slug: str, freq: Counter, known: dict[str, str] | None = None) -> str:
     if not _SLUG.match(slug or ""):
         return slug
@@ -86,23 +122,33 @@ def pretty(slug: str, freq: Counter, known: dict[str, str] | None = None) -> str
         return slug.upper()  # "mcw" -> "MCW"
     if len(slug) < 6:
         return slug[:1].upper() + slug[1:]
-    words = split(slug, freq)
+    words = split(slug, freq) or _suffix_split(slug, freq)
     if not words:
         return slug[:1].upper() + slug[1:]
-    return " ".join(w if w.isdigit() else w[:1].upper() + w[1:] for w in words)
+    return " ".join(_cap(w) for w in words)
 
 
 def fix_index(index) -> int:
-    """Rename slug-only companies across the index. Returns how many distinct names changed."""
+    """Rename slug-only companies across the index in one pass. Returns how many distinct names changed."""
     freq, known = vocab(index), known_names(index)
+    freq._total = sum(freq.values()) or 1  # computed once, not once per word lookup
     rows = index._q("""SELECT DISTINCT company FROM postings WHERE open = 1 AND company NOT LIKE '% %'""")
-    changed = 0
+    renames = []
+    for r in rows:
+        old = r["company"] or ""
+        if not (_SLUG.match(old.lower()) and (old == old.lower() or old[1:] == old[1:].lower())):
+            continue
+        new = pretty(old.lower(), freq, known)
+        if new and new != old:
+            renames.append((old, new))
+    if not renames:
+        return 0
     with index.lock:
-        for r in rows:
-            old = r["company"] or ""
-            new = pretty(old.lower(), freq, known) if _SLUG.match(old.lower()) and (old == old.lower() or old[1:] == old[1:].lower()) else old
-            if new and new != old:
-                index.db.execute("UPDATE postings SET company = ? WHERE company = ?", (new, old))
-                changed += 1
+        index.db.execute("CREATE TEMP TABLE IF NOT EXISTS renames (old TEXT PRIMARY KEY, new TEXT)")
+        index.db.execute("DELETE FROM renames")
+        index.db.executemany("INSERT OR REPLACE INTO renames (old, new) VALUES (?, ?)", renames)
+        index.db.execute("""UPDATE postings SET company = (SELECT new FROM renames WHERE old = postings.company)
+                            WHERE company IN (SELECT old FROM renames)""")
+        index.db.execute("DROP TABLE renames")
         index.db.commit()
-    return changed
+    return len(renames)

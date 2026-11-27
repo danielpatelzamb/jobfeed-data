@@ -47,8 +47,12 @@ def relevance_from_reasons(reasons: str, title: str = "") -> float:
         base, said = 0.55, r.split("nearby role:", 1)[1].split(";")[0]
     else:
         return 0.5
+    if "plain title" in r:
+        base *= 0.9   # a student's feed: "Software Engineer Intern" ahead of plain "Software Engineer"
+    if "staffing agency" in r:
+        base *= 0.8
     if not title:
-        return base
+        return round(base, 3)
     target = set(re.findall(r"[a-z0-9]+", said.split(",")[0]))
     words = [w for w in re.findall(r"[a-z0-9]+", title.lower()) if w not in _FILLER]
     extra = len([w for w in words if w not in target])

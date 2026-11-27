@@ -16,7 +16,8 @@ _INTERN = _rx([r"intern", r"internship", r"co-?op", r"summer analyst", r"summer 
                r"werkstudent", r"trainee", r"stagiaire", r"praktikum"])
 _SENIOR = _rx([r"senior", r"sr\.?", r"staff", r"principal", r"lead", r"head", r"director", r"vp", r"vice president",
                r"chief", r"c[teofi]o", r"partner", r"managing", r"manager", r"architect", r"distinguished",
-               r"fellow", r"expert", r"iii", r"iv", r"v", r"president", r"svp", r"evp", r"avp", r"executive"])
+               r"fellow", r"expert", r"iii", r"iv", r"v", r"president", r"svp", r"evp", r"avp", r"executive",
+               r"supervisor", r"superintendent"])
 _ENTRY = _rx([r"junior", r"jr\.?", r"entry", r"entry[- ]level", r"new grad", r"graduate", r"early career",
               r"associate", r"analyst", r"assistant", r"coordinator", r"rotational", r"fellowship", r"i",
               r"campus", r"class of 20\d\d", r"20\d\d start", r"university grad"])
@@ -86,11 +87,30 @@ _US_CITIES = re.compile(r"(?<![a-z])(new york city|nyc|san francisco|sf bay area
                         r"seattle|chicago|austin|houston|dallas|denver|atlanta|miami|washington,? d\.?c\.?|"
                         r"philadelphia|san diego|san jose|palo alto|menlo park|mountain view|"
                         r"brooklyn|cambridge, ma|stamford|greenwich)(?![a-z])")
-_NOT_US = re.compile(r"(?<![a-z])(canada|toronto|vancouver|london|united kingdom|uk|india|bangalore|bengaluru|"
-                     r"germany|berlin|france|paris|ireland|dublin|singapore|australia|sydney|mexico|brazil|"
-                     r"netherlands|amsterdam|spain|poland|japan|tokyo|israel|tel aviv|philippines|argentina|"
-                     r"colombia|romania|portugal|lisbon|sweden|switzerland|zurich|hong kong|china|korea|"
-                     r"south africa|nigeria|kenya|uae|dubai|emea|apac|latam|europe)(?![a-z])")
+_NOT_US = re.compile(r"(?<![a-z])(canada|toronto|vancouver|montreal|ottawa|calgary|edmonton|ontario|quebec|"
+                     r"british columbia|alberta|london|united kingdom|uk|england|scotland|wales|manchester|edinburgh|"
+                     r"india|bangalore|bengaluru|hyderabad|pune|chennai|mumbai|delhi|new delhi|gurgaon|gurugram|noida|"
+                     r"kolkata|ahmedabad|telangana|karnataka|maharashtra|tamil nadu|haryana|uttar pradesh|"
+                     r"pakistan|karachi|lahore|islamabad|bangladesh|dhaka|sri lanka|colombo|nepal|"
+                     r"germany|berlin|munich|hamburg|frankfurt|france|paris|ireland|dublin|singapore|australia|sydney|"
+                     r"melbourne|new zealand|auckland|mexico|guadalajara|monterrey|brazil|sao paulo|são paulo|"
+                     r"rio de janeiro|netherlands|amsterdam|rotterdam|spain|madrid|barcelona|poland|warsaw|krakow|"
+                     r"kraków|wroclaw|japan|tokyo|osaka|israel|tel aviv|philippines|manila|cebu|argentina|buenos aires|"
+                     r"colombia|bogota|bogotá|medellin|chile|santiago|peru|lima|romania|bucharest|portugal|lisbon|porto|"
+                     r"sweden|stockholm|switzerland|zurich|geneva|austria|vienna|italy|milan|rome|belgium|brussels|"
+                     r"denmark|copenhagen|norway|oslo|finland|helsinki|estonia|tallinn|lithuania|vilnius|latvia|riga|"
+                     r"czech|czechia|prague|hungary|budapest|ukraine|kyiv|serbia|belgrade|bulgaria|sofia|croatia|"
+                     r"greece|athens|turkey|türkiye|istanbul|hong kong|china|shanghai|beijing|shenzhen|taiwan|taipei|"
+                     r"korea|seoul|vietnam|ho chi minh|hanoi|thailand|bangkok|indonesia|jakarta|malaysia|kuala lumpur|"
+                     r"south africa|cape town|johannesburg|nigeria|lagos|kenya|nairobi|ghana|accra|egypt|cairo|morocco|"
+                     r"uae|united arab emirates|dubai|abu dhabi|saudi arabia|riyadh|qatar|doha|bahrain|kuwait|oman|"
+                     r"jordan|amman|lebanon|dominican republic|costa rica|guatemala|el salvador|honduras|panama|"
+                     r"uruguay|montevideo|kazakhstan|armenia|yerevan|emea|apac|latam|europe|asia)(?![a-z])")
+# a location that is only a country code, and isn't a US state code
+_ISO_ONLY = {"pk", "do", "it", "tr", "ae", "br", "mx", "gb", "uk", "fr", "es", "pl", "nl", "be", "se", "no", "dk",
+             "fi", "ch", "at", "ie", "pt", "ro", "bg", "hr", "rs", "ua", "cz", "hu", "gr", "il", "eg", "ng", "ke",
+             "za", "au", "nz", "jp", "kr", "cn", "hk", "tw", "sg", "my", "th", "vn", "ph", "id", "bd", "lk", "np",
+             "ar", "cl", "co", "pe", "uy", "cr", "gt", "sv", "hn", "pa", "sa", "qa", "kw", "om", "bh", "jo", "lb"}
 
 
 def is_us(location: str) -> bool | None:
@@ -99,10 +119,13 @@ def is_us(location: str) -> bool | None:
     loc = raw.lower()
     if not loc.strip() or loc.strip() in ("remote", "anywhere", "worldwide", "global", "hybrid", "not specified"):
         return None
-    strong = bool(_US_WORDS.search(loc) or _US_ABBR.search(raw))
+    if loc.strip(" .") in _ISO_ONLY:
+        return False
+    words = bool(_US_WORDS.search(loc))
+    strong = words or bool(_US_ABBR.search(raw))
     us = strong or bool(_US_CITIES.search(loc))
     other = bool(_NOT_US.search(loc))
-    if other and not strong:  # "Boston, Lincolnshire, UK", "Cambridge, UK": a US city name abroad
+    if other and not words:  # "Bengaluru, IN", "Amsterdam, NH", "Cambridge, UK": a foreign place beats a bare code
         return False
     if us and not other:
         return True
