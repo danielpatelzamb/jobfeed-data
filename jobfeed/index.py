@@ -216,7 +216,9 @@ class JobIndex:
             from jobfeed.crawler import ALL_ATS
             ats = ALL_ATS
         q = (f"SELECT ats, board, company FROM boards WHERE ats IN ({','.join('?' * len(ats))}) "
-             "AND (next_try IS NULL OR next_try <= ?) ORDER BY origin != 'user', status != 'ok', ats, board")
+             "AND (next_try IS NULL OR next_try <= ? OR (status = 'failing' AND error_class IS NULL)) "
+             # failures recorded before errors were classified (and before polite retries) get one fresh try
+             "ORDER BY origin != 'user', status != 'ok', ats, board")
         args = [*ats, now_iso()]
         if limit:
             q += " LIMIT ?"
