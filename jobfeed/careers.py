@@ -56,8 +56,26 @@ _host_next: dict[str, float] = {}
 _host_lock = threading.Lock()
 
 
-def _polite(url: str, gap: float = 1.0):
-    host = urlparse(url).netloc
+# Workday rate-limits by the caller across a whole cluster (wd1, wd5...), not per company site. So besides one
+# request a second per site, keep each cluster at CLUSTER_GAP seconds between requests, and once a cluster has said
+# "too many requests" CLUSTER_STOP times in a run, leave it alone until the next run (those boards retry tomorrow).
+CLUSTER_GAP = 0.6
+CLUSTER_STOP = 15
+_cluster_429: dict[str, int] = {}
+
+
+def _cluster(url: str) -> str:
+    m = re.search(r"\.(wd\d+)\.myworkdayjobs\.com$", urlparse(url).netloc.lower())
+    return f"workday-{m.group(1)}" if m else ""
+
+
+def reset_run_limits():
+    with _host_lock:
+        _cluster_429.clear()
+
+
+def _polite(url: str, gap: float = 1.0, key: str = ""):
+    host = key or urlparse(url).netloc
     with _host_lock:
         now = time.monotonic()
         at = max(now, _host_next.get(host, 0.0))
@@ -67,11 +85,19 @@ def _polite(url: str, gap: float = 1.0):
 
 
 def _get(session, url: str, accept: str = "*/*") -> requests.Response:
+    cluster = _cluster(url)
+    if cluster:
+        if _cluster_429.get(cluster, 0) >= CLUSTER_STOP:
+            raise BoardError("HTTP 429: Workday asked us to slow down; paused until the next run")
+        _polite(url, CLUSTER_GAP, key=cluster)
     _polite(url)
     try:
         r = (session or requests).get(url, timeout=TIMEOUT, headers={"User-Agent": USER_AGENT, "Accept": accept})
     except requests.RequestException as exc:
         raise BoardError(f"request failed: {exc}") from exc
+    if cluster and r.status_code == 429:
+        with _host_lock:
+            _cluster_429[cluster] = _cluster_429.get(cluster, 0) + 1
     if r.status_code == 404:
         raise BoardError("board not found (404)")
     if r.status_code in (403, 429, 503) and ("cf-mitigated" in {k.lower() for k in r.headers}

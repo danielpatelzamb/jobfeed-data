@@ -19,7 +19,7 @@ from jobfeed.sources import FETCHERS, BoardError
 
 log = logging.getLogger("jobfeed.crawler")
 
-WORKERS = {"greenhouse": 5, "ashby": 4, "lever": 3, "workday": 12, "icims": 12, "successfactors": 4, "taleo": 4,
+WORKERS = {"greenhouse": 5, "ashby": 4, "lever": 3, "workday": 4, "icims": 12, "successfactors": 4, "taleo": 4,
            "oracle": 4, "bamboohr": 8, "paylocity": 4, "recruitee": 4, "personio": 4, "breezy": 4, "teamtailor": 4,
            "jazzhr": 4, "jobvite": 4, "rippling": 4, "adp": 4, "ukg": 4, "paycom": 4, "dayforce": 4, "jsonld": 12}  # Lever is still paced to one request a second
 
@@ -57,6 +57,8 @@ def crawl(index: JobIndex, fetchers=FETCHERS, ats: tuple[str, ...] = ALL_ATS,
           limit: int | None = None, workers: dict | None = None, stop: threading.Event | None = None,
           spacing: dict | None = None, boards: list | None = None, record: bool = True) -> dict:
     """Fetch every due board and load it into the index. Platforms run side by side."""
+    from jobfeed.careers import reset_run_limits
+    reset_run_limits()
     base_workers = {**WORKERS, **(workers or {})}
     workers = {**base_workers, **(index.get_meta("crawl_tuning") or {})}  # what the last runs learned wins
     spacing = {"lever": 1.0, **(spacing or {})}

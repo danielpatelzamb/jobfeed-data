@@ -32,8 +32,8 @@ def classify(err: str) -> str:
         return "timeout"
     if re.search(r"http 5\d\d", e):
         return "server_error"
-    if "404" in e or "not found" in e:
-        return "not_found"
+    if "404" in e or "not found" in e or "http 401" in e or "was not json" in e:
+        return "not_found"  # 401 / an HTML page instead of the feed: that company switched its job page off
     if "no job listings" in e or "markup" in e or "job list not found" in e:
         return "no_jobs_markup"
     if "json" in e or "unexpected" in e or "readable" in e or "parse" in e:

@@ -590,5 +590,11 @@ class JobIndex:
             args += [limit, offset]
         return self._q(sql, args)
 
+    def open_at(self, source: str, board: str, limit: int = 60):
+        """Open postings on one company's board, newest first."""
+        return self._q("""SELECT id, title, location, url, posted_at, first_seen, company FROM postings
+                          WHERE source = ? AND board = ? AND open = 1
+                          ORDER BY COALESCE(posted_at, first_seen) DESC LIMIT ?""", (source, board, limit))
+
     def count_open(self) -> int:
         return self._q("SELECT COUNT(*) FROM postings WHERE open = 1", one=True)[0]
