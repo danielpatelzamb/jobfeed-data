@@ -1,0 +1,6 @@
+data/
+*.db
+*.db-*
+*.gz
+summary.json
+__pycache__/

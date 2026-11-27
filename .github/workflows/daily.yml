@@ -1,0 +1,68 @@
+name: daily job data
+
+on:
+  schedule:
+    - cron: "11 8 * * *"   # 08:11 UTC, about 3am New York: published before the app's 7am run
+  workflow_dispatch: {}
+
+permissions:
+  contents: write          # to publish the release files
+
+concurrency:
+  group: daily-data
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      GH_TOKEN: ${{ github.token }}
+      JOBFEED_DATA: data
+      STREAM_COUNTRIES: US
+      STREAM_USAJOBS: "0"   # USAJOBS data may not be republished; the app server fetches it privately
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+
+      - name: Start from yesterday's index (keeps first-seen dates, reposts and history)
+        run: |
+          mkdir -p data
+          if gh release download index --pattern index.db.gz --dir data 2>/dev/null; then
+            gunzip -f data/index.db.gz && echo "restored $(du -h data/index.db | cut -f1)"
+          else
+            echo "no earlier index: first run"
+          fi
+
+      - name: Crawl every company board and careers site
+        run: python -m jobfeed.datajob crawl --minutes 240
+
+      - name: Extra feeds (Workable, Hacker News)
+        run: python -m jobfeed.datajob streams
+
+      - name: Visa sponsorship (new DOL file each quarter)
+        run: python -m jobfeed.datajob sponsors
+
+      - name: Find new company boards (Mondays, or when run by hand)
+        run: |
+          if [ "$(date -u +%u)" = "1" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            python -m jobfeed.datajob discover || echo "discovery skipped"
+          fi
+
+      - name: Signals, cleanup and export
+        run: python -m jobfeed.datajob finish --out index.db.gz --summary summary.json
+
+      - name: Publish
+        run: |
+          gh release view index >/dev/null 2>&1 || gh release create index --title "Job index" --notes "Rebuilt daily by the workflow. index.db.gz is the data; summary.json says what came in."
+          gh release upload index index.db.gz summary.json --clobber
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json; s = json.load(open("summary.json"))
+          print(f"### {s['open']:,} open roles from {s['companies']:,} companies")
+          print(f"Published {s['published_at']}, {s['export_bytes']/1e6:,.0f} MB")
+          for k, v in (s.get('streams') or {}).items():
+              print(f"- {k}: {v}")
+          PY
