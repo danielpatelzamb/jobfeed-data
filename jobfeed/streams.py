@@ -95,7 +95,11 @@ def discover_common_crawl(crawl_id: str | None = None, max_pages: int = 30, sess
         params = {"url": host, "output": "json"}
         if host.startswith("*."):
             params = {"url": host[2:], "matchType": "domain", "output": "json"}
-        pages = s.get(api, params={**params, "showNumPages": "true"}, timeout=60).json()
+        try:
+            pages = s.get(api, params={**params, "showNumPages": "true"}, timeout=60).json()
+        except (requests.RequestException, ValueError):
+            log.warning("Common Crawl index didn't answer for %s; skipping it this time", host)
+            continue
         for page in range(min(int(pages.get("pages", 1)), max_pages)):
             r = s.get(api, params={**params, "fl": "url", "page": page}, timeout=120)
             if r.status_code != 200:

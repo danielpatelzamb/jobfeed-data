@@ -34,7 +34,7 @@ def main(argv=None) -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("crawl")
     c.add_argument("--limit", type=int, default=None)
-    c.add_argument("--ats", default="greenhouse,ashby,lever")
+    c.add_argument("--ats", default="", help="comma-separated platforms (default: all of them)")
     c.add_argument("--minutes", type=float, default=0, help="stop starting new boards after this long")
     sub.add_parser("streams")
     s = sub.add_parser("sponsors")
@@ -56,7 +56,9 @@ def main(argv=None) -> int:
         stop = threading.Event()
         if args.minutes:
             threading.Timer(args.minutes * 60, stop.set).start()
-        out = crawl(idx, ats=tuple(a.strip() for a in args.ats.split(",") if a.strip()), limit=args.limit, stop=stop)
+        from jobfeed.crawler import ALL_ATS
+        ats = tuple(a.strip() for a in args.ats.split(",") if a.strip()) or ALL_ATS
+        out = crawl(idx, ats=ats, limit=args.limit, stop=stop)
         out["directory_added"] = added
         print(json.dumps(out))
         os._exit(0)  # don't wait on a pending stop timer

@@ -27,11 +27,26 @@ class BoardError(Exception):
 
 
 def _get_json(url: str, session: requests.Session | None = None):
+    """One polite retry for a busy server (429/5xx, honoring Retry-After up to 30s) or a dropped connection."""
+    import time as _time
     s = session or requests
-    try:
-        resp = s.get(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"}, timeout=TIMEOUT)
-    except requests.RequestException as exc:
-        raise BoardError(f"request failed: {exc}") from exc
+    resp = None
+    for attempt in (1, 2):
+        try:
+            resp = s.get(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"}, timeout=TIMEOUT)
+        except requests.RequestException as exc:
+            if attempt == 2:
+                raise BoardError(f"request failed: {type(exc).__name__}") from exc
+            _time.sleep(3)
+            continue
+        if resp.status_code in (429, 500, 502, 503, 504) and attempt == 1:
+            try:
+                wait = min(30.0, float(resp.headers.get("Retry-After", "5")))
+            except ValueError:
+                wait = 5.0
+            _time.sleep(wait)
+            continue
+        break
     if resp.status_code == 404:
         raise BoardError("board not found (404) - check the board name")
     if resp.status_code != 200:

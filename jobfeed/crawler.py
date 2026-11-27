@@ -19,7 +19,7 @@ from jobfeed.sources import FETCHERS, BoardError
 
 log = logging.getLogger("jobfeed.crawler")
 
-WORKERS = {"greenhouse": 8, "ashby": 4, "lever": 3, "workday": 12, "icims": 12, "successfactors": 4, "taleo": 4,
+WORKERS = {"greenhouse": 5, "ashby": 4, "lever": 3, "workday": 12, "icims": 12, "successfactors": 4, "taleo": 4,
            "oracle": 4, "bamboohr": 8, "paylocity": 4, "recruitee": 4, "personio": 4, "breezy": 4, "teamtailor": 4,
            "jazzhr": 4, "jobvite": 4, "rippling": 4, "adp": 4, "ukg": 4, "paycom": 4, "dayforce": 4, "jsonld": 12}  # Lever is still paced to one request a second
 
@@ -50,6 +50,9 @@ def crawl(index: JobIndex, fetchers=FETCHERS, ats: tuple[str, ...] = ALL_ATS,
     workers = {**WORKERS, **(workers or {})}
     spacing = {"lever": 1.0, **(spacing or {})}
     totals = {"boards": 0, "ok": 0, "failed": 0, "dead": 0, "postings": 0, "new": 0}
+    from collections import Counter
+    reasons: Counter = Counter()   # why boards failed, per platform: the first thing to read when counts drop
+    per_platform: dict = {}
     tl = threading.Lock()
     started = time.monotonic()
 
@@ -92,6 +95,11 @@ def crawl(index: JobIndex, fetchers=FETCHERS, ats: tuple[str, ...] = ALL_ATS,
                     with tl:
                         totals["boards"] += 1
                         totals["dead" if dead else "failed"] += 1
+                        if not dead:
+                            import re as _re
+                            reasons[f"{platform}: {_re.sub(r'[0-9a-f-]{8,}|https?://\S+', '…', err)[:70]}"] += 1
+                        pp = per_platform.setdefault(platform, {"ok": 0, "failed": 0, "dead": 0, "postings": 0})
+                        pp["dead" if dead else "failed"] += 1
                     continue
                 company = row["company"] or (jobs[0].company if jobs and jobs[0].company != row["board"] else "") \
                     or pretty_company(row["board"])
@@ -104,6 +112,9 @@ def crawl(index: JobIndex, fetchers=FETCHERS, ats: tuple[str, ...] = ALL_ATS,
                     totals["ok"] += 1
                     totals["postings"] += len(jobs)
                     totals["new"] += len(new)
+                    pp = per_platform.setdefault(platform, {"ok": 0, "failed": 0, "dead": 0, "postings": 0})
+                    pp["ok"] += 1
+                    pp["postings"] += len(jobs)
 
     from jobfeed.careers import reset_page_budget
     reset_page_budget()
@@ -113,6 +124,8 @@ def crawl(index: JobIndex, fetchers=FETCHERS, ats: tuple[str, ...] = ALL_ATS,
     for t in threads:
         t.join()
     totals["seconds"] = round(time.monotonic() - started)
+    totals["platforms"] = per_platform
+    totals["top_failures"] = reasons.most_common(12)
     if record:
         index.set_meta("last_crawl", {**totals, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
     log.info("crawl done: %s", totals)

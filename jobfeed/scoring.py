@@ -9,6 +9,7 @@ SORTS = {"best": "Best match", "newest": "Newest posted", "fit": "Best fit (AI)"
 # Weights for "best match". Freshness fades to zero over FRESH_DAYS.
 W_FIT, W_REL, W_FRESH, W_EXP = 0.40, 0.25, 0.20, 0.15
 FRESH_DAYS = 30.0
+W_LEARN = 0.20
 
 
 def to_utc(stamp) -> str:
@@ -57,7 +58,9 @@ def score_sql(have, stretch) -> tuple[str, list]:
             f" + {W_EXP} * (CASE WHEN years_min IS NULL OR ? < 0 THEN 0.8 WHEN years_min <= ? THEN 1.0"
             f" WHEN years_min <= ? THEN 0.6 ELSE 0.0 END))"
             f" * (CASE WHEN ghost = 1 THEN 0.85 ELSE 1.0 END)")
-    return expr, [h, h, h + (stretch or 0)]
+    # what people like you saved, applied to and got interviews from (learn.py), once a model is trusted
+    expr = f"(CASE WHEN learned IS NULL THEN {expr} ELSE {1 - W_LEARN} * {expr} + {W_LEARN} * learned END)"
+    return expr, [h, h, h + (stretch or 0)] * 2
 
 
 def order_sql(sort: str, have, stretch) -> tuple[str, list]:

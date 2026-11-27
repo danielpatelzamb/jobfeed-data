@@ -169,7 +169,11 @@ def refresh(index, session=None, force: bool = False) -> dict:
         if not latest:
             for url, label in guess_urls():
                 try:
-                    if s.head(url, timeout=30, allow_redirects=True).status_code == 200:
+                    code = s.head(url, timeout=30, allow_redirects=True).status_code
+                    if code in (403, 405):  # some servers refuse HEAD; ask for the first byte instead
+                        with s.get(url, headers={"Range": "bytes=0-0"}, stream=True, timeout=30) as g:
+                            code = 200 if g.status_code in (200, 206) else g.status_code
+                    if code == 200:
                         latest = (url, label)
                         break
                 except requests.RequestException:
