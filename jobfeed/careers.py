@@ -223,17 +223,31 @@ def _jobposting(obj):
     return None
 
 
+def _text(v) -> str:
+    """Markup values come as text, {"name": ...} objects or lists of either; always give back plain text."""
+    if isinstance(v, list):
+        v = next((x for x in v if x), "")
+    if isinstance(v, dict):
+        v = v.get("name") or v.get("@value") or ""
+    return v.strip() if isinstance(v, str) else ""
+
+
 def _place(jp) -> str:
     locs = jp.get("jobLocation") or []
     out = []
     for loc in (locs if isinstance(locs, list) else [locs])[:3]:
-        a = (loc or {}).get("address") or {}
+        if not isinstance(loc, dict):
+            continue
+        a = loc.get("address") or {}
+        if isinstance(a, list):
+            a = next((x for x in a if isinstance(x, dict)), {})
         if isinstance(a, str):
             out.append(a)
             continue
-        country = a.get("addressCountry")
-        country = country.get("name") if isinstance(country, dict) else country
-        part = ", ".join(x for x in (a.get("addressLocality"), a.get("addressRegion"), country) if x)
+        if not isinstance(a, dict):
+            continue
+        country = _text(a.get("addressCountry"))
+        part = ", ".join(x for x in (_text(a.get("addressLocality")), _text(a.get("addressRegion")), country) if x)
         if part and part not in out:
             out.append(part)
     s = "; ".join(out)

@@ -10,6 +10,7 @@ Students add those roles with Save."""
 from __future__ import annotations
 
 import html
+import logging
 import re
 from urllib.parse import quote_plus
 
@@ -18,6 +19,7 @@ import requests
 from jobfeed.models import Job, html_to_text
 from jobfeed.sources import BoardError
 
+log = logging.getLogger("jobfeed.bigtech")
 GOOGLE_BASE = "https://www.google.com/about/careers/applications/jobs/results/"
 GOOGLE_ROLES = ("product manager", "associate product manager", "program manager", "software engineer",
                 "data scientist", "data analyst", "business analyst", "user experience", "solutions engineer",
@@ -83,7 +85,12 @@ def fetch_google(board: str = "google", company: str = "", session=None, existin
         if not allowed(s, url):
             continue
         try:
-            for j in parse_google_results(_get(s, url, "text/html").text):
+            page = _get(s, url, "text/html").text
+            got = parse_google_results(page)
+            if not got:  # say what came back, so the audit shows whether it's a markup change or a block
+                log.warning("Google careers: 0 roles parsed (%s bytes, %s job links, consent page: %s) for %s",
+                            len(page), page.count("jobs/results/"), "consent.google" in page, url[-80:])
+            for j in got:
                 found.setdefault(j["id"], j)
         except BoardError as exc:
             errors += 1

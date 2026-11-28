@@ -5,6 +5,7 @@ crawl delay), an honest User-Agent, and dead or failing boards backed off for da
 """
 from __future__ import annotations
 
+import inspect
 import logging
 import threading
 import time
@@ -78,23 +79,27 @@ def crawl(index: JobIndex, fetchers=FETCHERS, ats: tuple[str, ...] = ALL_ATS,
         spacer = _Spacer(spacing.get(platform, 0.0))
         session = requests.Session()
 
+        try:
+            params = inspect.signature(fetch).parameters
+            takes_session = "session" in params or any(p.kind == p.VAR_KEYWORD for p in params.values())
+        except (TypeError, ValueError):
+            takes_session = True
+
         def one(row):
             if stop is not None and stop.is_set():
                 return row, None, "stopped"
             spacer.wait()
             try:
+                if not takes_session:  # simple fetchers (tests) take only board and company
+                    return row, fetch(row["board"], row["company"] or ""), None
                 if platform in CAREER_ATS or platform in ANY_ATS:  # pass what we know: pages aren't re-read
                     return row, fetch(row["board"], row["company"] or "", session=session,
                                       existing=index.existing_for(platform, row["board"])), None
                 return row, fetch(row["board"], row["company"] or "", session=session), None
-            except TypeError:  # fetchers in tests may not take a session
-                try:
-                    return row, fetch(row["board"], row["company"] or ""), None
-                except BoardError as exc:
-                    return row, None, str(exc)
             except BoardError as exc:
                 return row, None, str(exc)
-            except Exception as exc:  # one bad board never stops the crawl
+            except Exception as exc:  # one bad board never stops the crawl (or a worker)
+                log.warning("%s %s: unexpected %r", platform, row["board"], exc)
                 return row, None, f"unexpected: {exc!r}"
 
         with ThreadPoolExecutor(max_workers=max(1, workers.get(platform, 2))) as pool:
